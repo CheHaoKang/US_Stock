@@ -267,190 +267,43 @@ class StockUtil(Util):
 
                 print("---Finished {}---".format(file_name))
 
-    def extract_expenditure_revenue(self, stock_name, red=False):
+    def extract_expenditure_revenue(self, stock_name):
         res = self.html_get('https://www.marketwatch.com/investing/stock/' + stock_name + '/financials/income/quarter')
         if res == -1:
             return False
 
+        revenue_values = []
+        soup = BeautifulSoup(res, 'html.parser')
         try:
-            if ws_header_set == 0:
-                tr = soup.find('thead', {'class': "table__header"}).find("tr", {"class": "table__row"})
-                for th in tr.find_all('th', {"class": "overflow__heading"}):
-                    if "fixed--column" in th["class"]:
-                        continue
-
-                    if re.search("\d{4}$", th.text):
-                        titles.append(th.text)
-
             for tr in soup.find('tbody', {'class': "table__body"}).find_all("tr", {"class": "table__row"}):
                 title = tr.find('td', {"class": "fixed--column"}).find('div', {'class': 'fixed--cell'})
                 if 'Sales/Revenue' == title.text.strip():
                     revenue_sum = 0.0
-                    revenue_counter = 0.0
+                    revenue_counter = 0
                     for value in tr.find_all('td', {"class": "overflow__cell"}):
                         if "fixed--column" in value["class"]:
                             continue
-
-                        # print(value.text)
-                        # print(transform_m_b_to_number(value.text))
 
                         v = value.text.strip()
                         if v:
                             revenue_values.append(v)
-                        if not transform_m_b_to_number(v):
+
+                        number = self.transform_m_b_to_number(v)
+                        if not number:
                             continue
-                        revenue_sum += transform_m_b_to_number(v)
+
+                        revenue_sum += number
                         revenue_counter += 1
 
-                    # print('===')
-                    # print(revenue_sum)
-                    # print(revenue_counter)
-                    # print(transform_m_b_to_number(revenue_values[-1]))
-                    # print(revenue_sum / revenue_counter)
-                    # print('---')
-
-                    if not transform_m_b_to_number(revenue_values[-1]) or transform_m_b_to_number(revenue_values[-1]) < REVENUE_THRESHOLD:
-                        return False
-
-                    if transform_m_b_to_number(revenue_values[-1]) and transform_m_b_to_number(revenue_values[-1]) > (revenue_sum / revenue_counter):
-                        revenue_trend = 'up'
-                elif 'Gross Income' == title.text.strip():
-                    for value in tr.find_all('td', {"class": "overflow__cell"}):
-                        if "fixed--column" in value["class"]:
-                            continue
-                        v = value.text.strip()
-                        if v:
-                            gross_values.append(v)
-
-                    if not transform_m_b_to_number(gross_values[-1]) or transform_m_b_to_number(gross_values[-1]) < GROSS_REVENUE_THRESHOLD:
-                        return False
-                elif 'EBITDA' == title.text.strip():
-                    for value in tr.find_all('td', {"class": "overflow__cell"}):
-                        if "fixed--column" in value["class"]:
-                            continue
-                        v = value.text.strip()
-                        if v:
-                            EBITDA_values.append(v)
-
-                    break
+                    print('===Sales/Revenue===')
+                    print(revenue_counter)
+                    print(revenue_sum)
+                    print(self.transform_m_b_to_number(revenue_values[-1]))
+                    print(revenue_sum / revenue_counter)
+                    print('---Sales/Revenue---')
         except:
             traceback.print_exc()
 
-
-        res = html_get('https://www.marketwatch.com/investing/stock/' + stock_name + '/financials/cash-flow/quarter')
-        soup = BeautifulSoup(res, 'html.parser')
-        expenditure_values = []
-        expenditure_trend = ''
-        try:
-            for tr in soup.find_all('tbody', {'class': "table__body"})[1].find_all("tr", {"class": "table__row"}):
-                title = tr.find('td', {"class": "fixed--column"}).find('div', {'class': 'fixed--cell'})
-                if 'Capital Expenditures' == title.text.strip():
-                    expenditure_sum = 0.0
-                    expenditure_counter = 0.0
-                    for value in tr.find_all('td', {"class": "overflow__cell"}):
-                        if "fixed--column" in value["class"]:
-                            continue
-
-                        # print(value.text)
-                        # print(transform_m_b_to_number(value.text))
-
-                        v = value.text.strip()
-                        if v:
-                            expenditure_values.append(v)
-                        if not transform_m_b_to_number(v):
-                            continue
-                        expenditure_sum += transform_m_b_to_number(v)
-                        expenditure_counter += 1
-
-                    # print('===')
-                    # print(expenditure_sum)
-                    # print(expenditure_counter)
-                    # print(transform_m_b_to_number(expenditure_values[-1]))
-                    # print(expenditure_sum / expenditure_counter)
-                    # print('---')
-
-                    if transform_m_b_to_number(expenditure_values[-1]) and transform_m_b_to_number(expenditure_values[-1]) < (expenditure_sum / expenditure_counter):
-                        expenditure_trend = 'down'
-
-                    break
-        except:
-            traceback.print_exc()
-
-        revenue_percent = -1
-        if revenue_values and transform_m_b_to_number(revenue_values[0]) and transform_m_b_to_number(revenue_values[-1]):
-            revenue_percent = transform_m_b_to_number(revenue_values[-1]) / transform_m_b_to_number(revenue_values[0]) * 100
-
-        gross_margin_percent = -1
-        if revenue_values and gross_values and transform_m_b_to_number(revenue_values[-1]) and transform_m_b_to_number(gross_values[-1]):
-            gross_margin_percent = transform_m_b_to_number(gross_values[-1]) / transform_m_b_to_number(revenue_values[-1]) * 100
-
-        print('>>>' + stock_name + '<<<')
-        print(revenue_values)
-        print(expenditure_values)
-        print(gross_values)
-        print(EBITDA_values)
-        print('revenue_trend => ' + revenue_trend)
-        print('expenditure_trend => ' + expenditure_trend)
-        print('revenue_percent => ' + str(revenue_percent))
-        print('gross_margin_percent => ' + str(gross_margin_percent))
-        print('---' + stock_name + '---')
-
-        if revenue_trend != 'up' and expenditure_trend != 'down' and revenue_percent < 150 and gross_margin_percent < 50:
-            return False
-
-        # grab the active worksheet
-        ws.title = 'potentialStocks'  # 設置worksheet的標題
-
-        # write header
-        if ws_header_set == 0 and len(titles):
-            excelHeader = titles
-            ws.append(excelHeader)
-            ws_header_set = 1
-            position = 1
-            for header in excelHeader:
-                ws[chr(ord('@') + position) + str(ws._current_row)].font = blue_ft
-                position += 1
-
-        # revenue_percent = 160
-        # gross_margin_percent = 60
-
-        ws.append([stock_name.upper(), 'Sales/Revenue'] + revenue_values)
-        excel_add_link('A' + str(ws._current_row), link='https://xueqiu.com/S/' + stock_name, text=stock_name.upper())
-        ws['A' + str(ws._current_row)].font = red_ft if red else blue_ft
-        excel_add_link(cell='B' + str(ws._current_row), link='https://www.marketwatch.com/investing/stock/' + stock_name + '/financials/income/quarter', text='Sales/Revenue')
-        ws['B' + str(ws._current_row)].font = blue_ft if revenue_percent < 150 else green_ft
-        excel_add_color(ft=red_ft, position=3, array=revenue_values)
-
-        ws.append(['', 'Capital Expenditures'] + expenditure_values)
-        excel_add_link(cell='B' + str(ws._current_row), link='https://www.marketwatch.com/investing/stock/' + stock_name + '/financials/cash-flow/quarter', text='Capital Expenditures')
-        ws['B' + str(ws._current_row)].font = blue_ft
-        excel_add_color(ft=red_ft, position=3, array=expenditure_values)
-
-        ws.append(['', 'Gross Income'] + gross_values)
-        excel_add_link(cell='B' + str(ws._current_row), link='https://www.marketwatch.com/investing/stock/' + stock_name + '/financials/income/quarter', text='Gross Income')
-        ws['B' + str(ws._current_row)].font = blue_ft if gross_margin_percent < 50 else green_ft
-        excel_add_color(ft=red_ft, position=3, array=gross_values)
-
-        ws.append(['', 'EBITDA'] + EBITDA_values)
-        excel_add_link(cell='B' + str(ws._current_row), link='https://www.marketwatch.com/investing/stock/' + stock_name + '/financials/income/quarter', text='EBITDA')
-        ws['B' + str(ws._current_row)].font = blue_ft
-        excel_add_color(ft=red_ft, position=3, array=EBITDA_values)
-        
-        ws.append(['', 'Earning Date', str(get_earning_released_date(stock_name))])
-        excel_add_link(cell='B' + str(ws._current_row), link='https://finance.yahoo.com/quote/' + stock_name, text='Earning Date')
-        ws['B' + str(ws._current_row)].font = blue_ft
-
-        ws.append(['', 'RS Rating'])
-        excel_add_link(cell='B' + str(ws._current_row), link='https://research.investors.com/stock-quotes/nyse-' + stock_name + '.htm', text='RS Rating')
-        ws['B' + str(ws._current_row)].font = blue_ft
-
-        for col in ws.columns:
-            ws.column_dimensions[col[0].column_letter].width = 25
-
-        return True
-
-
-    
     def get_earning_released_date(self, stock_name):
         html = self.html_get("https://finance.yahoo.com/quote/{}".format(stock_name))
         if html != -1:
