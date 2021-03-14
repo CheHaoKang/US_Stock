@@ -13,7 +13,7 @@ import sys, os
 
 class Util:
     RETRY = 3
-    REQUEST_TIMEOUT = 10
+    REQUEST_TIMEOUT = 6
     FETCH_TIMEOUT_FROM = 1
     FETCH_TIMEOUT_TO = 2
     PROXIES = [ '167.71.5.83:8080', '139.59.1.14:3128', '138.68.60.8:8080', '175.141.69.200:80', '165.227.83.185:3128', '154.16.63.16:3128', '5.252.161.48:3128', '154.16.202.22:3128', '161.35.70.249:8080', '89.187.177.105:80', '191.96.71.118:3128', '89.187.177.99:80', '203.202.245.62:80', '89.187.177.91:80', '89.187.177.92:80', '89.187.177.85:80', '115.243.116.151:80', '136.233.220.215:80', '46.4.96.137:3128', '195.146.50.22:3128', '35.235.115.241:80', '23.105.225.150:80', '88.198.50.103:8080', '51.81.113.246:80', '139.162.78.109:8080', '88.198.24.108:8080', '68.94.189.60:80', '203.202.245.58:80', '176.9.75.42:8080', '78.47.16.54:80', '198.199.86.11:8080', '128.199.202.122:8080', '209.97.150.167:8080', '134.209.29.120:3128', '159.203.61.169:3128', '191.96.42.80:8080', '176.9.119.170:8080', '102.129.249.120:8080' ] # https://free-proxy-list.net/
@@ -123,6 +123,7 @@ class MysqlUtil(Util):
 
 class StockUtil(Util):
     insert_index_volume_sql = 'INSERT IGNORE INTO index_volume (`date`, stock_id, `index`, volume) VALUES(%s, %s, %s, %s)'
+    qualified_days_ratio = 0.7
 
     def __init__(self, conn=None, cursor=None):
         Util.__init__(self)
@@ -221,7 +222,7 @@ class StockUtil(Util):
         from io import StringIO
 
         for file_name in os.listdir(path):
-            if file_name.endswith("test.csv"):
+            if file_name.endswith(('test' if self.test else '') + ".csv"):
                 print("===Processing {}===".format(file_name))
 
                 with open(path + '/' + file_name, encoding="utf8", newline='') as csvfile:
@@ -264,7 +265,7 @@ class StockUtil(Util):
                                 rows = []
                                 for _, row in df.iterrows():
                                     dt = self.to_ymd(row['Date'])
-                                    idx = float(row['Close'].replace('$', '').replace(',', ''))
+                                    idx = float(str(row['Close']).replace('$', '').replace(',', ''))
                                     volume = self.transform_m_b_to_number(row['Volume'].replace(',', ''))
                                     rows.append((dt, stock_id, idx, volume))
                                 print(rows)
@@ -404,10 +405,13 @@ class StockUtil(Util):
         self.GICS_csvs(categories)
 
     def renew_categories_index_volume(self):
-        get_Xueqiu_categories()
-        get_index_volume('GICS')
+        self.get_Xueqiu_categories()
+        self.get_index_volume('.' if self.test else 'GICS')
+        self.retrospect_ma(365)
 
-    def line_notify(self, group, good_stock_names):
+    def line_notify(self, group=None, good_stock_names=None):
+        from datetime import date
+
         with open('cred.json') as json_file:
             cred = json.load(json_file)
             token = cred['line']['token']
@@ -416,7 +420,7 @@ class StockUtil(Util):
             "Authorization": "Bearer {}".format(token),
             "Content-Type": "application/x-www-form-urlencoded"
         }
-        params = { "message": "[{}] {}".format(group, ', '.join(good_stock_names)) }
+        params = { "message": "[{}] {}".format(group, ', '.join(good_stock_names)) if group else "=== {} ===".format(date.today()) }
 
         try:
             r = requests.post("https://notify-api.line.me/api/notify", headers=headers, params=params)
@@ -429,7 +433,10 @@ class StockUtil(Util):
 
         import pandas as pd
         from pandas.tseries.offsets import BDay
-        today = pd.datetime.today()
+        if not self.test:
+            today = pd.datetime.today()
+        else:
+            today = pd.to_datetime(input("Enter date: ")) #pd.to_datetime('2020-10-29')
         days = []
         shift = 0
         while True:
@@ -487,6 +494,10 @@ class StockUtil(Util):
     def retrospect_ma(self, stock_id=None, days=None):
         if not days:
             days = self.get_stock_days()
+        elif isinstance(days, int):
+            days = self.get_stock_days(days)
+
+        zero_ma_date = self.retrieve_zero_ma_date()
 
         stock_id_sql = 'WHERE stock_id = {}'.format(self.conn.escape(stock_id)) if stock_id else ''
         self.cursor.execute('''
@@ -498,8 +509,19 @@ class StockUtil(Util):
         for row in self.cursor.fetchall():
             stock_id = row['stock_id']
             print('=== Computing ma: {}({}) ==='.format(row['stock_name'], stock_id))
-            for dt in days:
+            for dt in list(filter(lambda d: d <= zero_ma_date[stock_id], days)):
                 self.insert_ma(stock_id, dt)
+
+    def retrieve_zero_ma_date(self, stock_id=None):
+        self.cursor.execute('''
+            SELECT stock_id, MAX(`date`) zero_date
+            FROM index_volume
+            WHERE ma_50 = 0 AND ma_150 = 0 AND ma_200 = 0
+            {}
+            GROUP BY stock_id
+        '''.format('AND stock_id = ' . self.conn.escape(stock_id) if stock_id else ''))
+
+        return { row['stock_id']: row['zero_date'] for row in self.cursor.fetchall() }
 
     def compute_avg_volume(self, stock_id=None, days=50):
         self.cursor.execute('''
@@ -514,7 +536,7 @@ class StockUtil(Util):
         ''', (stock_id, days))
         row = self.cursor.fetchone()
 
-        return row['avg_volume']
+        return row['avg_volume'] if row['avg_volume'] else 0
 
     def get_one_year_max_min_index(self, stock_id):
         self.cursor.execute('''
@@ -533,24 +555,30 @@ class StockUtil(Util):
 
     def qualified_year_max_min(self, stock_id, index):
         year_max, year_min = self.get_one_year_max_min_index(stock_id)
-        return abs(index - year_max) / year_max <= 0.25 and (index - year_min) / year_min >= 0.3
+        # return abs(index - year_max) / year_max <= 0.25 and (index - year_min) / year_min >= 0.3
+        return (index - year_min) / year_min >= 0.3
 
-    def get_index_volume_from_html(self, html, counter, day):
+    def get_index_volume_from_html(self, html, day):
         soup = BeautifulSoup(html, 'html.parser')
-        try:
-            tr = soup.find("div", {"class": "download-data"}).select('tr')[counter]
-            if self.to_ymd(tr.select('td')[0].select('div')[0].text, '/') != day:
-                return False, None, None
-            index = tr.select('td')[4].text.replace('$', '').replace(',', '')
-            index = float(index)
-            volume = tr.select('td')[5].text.replace(',', '')
-            volume = self.transform_m_b_to_number(volume)
+        counter = 1
+        while True:
+            try:
+                tr = soup.find("div", {"class": "download-data"}).select('tr')[counter]
+                if self.to_ymd(tr.select('td')[0].select('div')[0].text, '/') < day:
+                    counter += 1
+                    continue
+                else:
+                    return False, None, None
+                index = tr.select('td')[4].text.replace('$', '').replace(',', '')
+                index = float(index)
+                volume = tr.select('td')[5].text.replace(',', '')
+                volume = self.transform_m_b_to_number(volume)
 
-            return True, index, volume
-        except:
-            traceback.print_exc()
-            time.sleep(1)
-            return False, None, None
+                return True, index, volume
+            except:
+                traceback.print_exc()
+                time.sleep(1)
+                return False, None, None
 
     def get_stock_daily(self, file_name):
         num_days = 20
@@ -618,9 +646,10 @@ class StockUtil(Util):
                             elif html != -1:
                                 connection_error = 0
 
-                                success, index, volume = self.get_index_volume_from_html(html, counter, day)
+                                success, index, volume = self.get_index_volume_from_html(html, day)
                                 if not success:
-                                    continue
+                                    counter = self.RETRY
+                                    break
 
                                 volumes_list.append(volume)
                                 if stock_name not in stocks_data:
@@ -654,9 +683,14 @@ class StockUtil(Util):
                         print('==={} {}'.format(stock_name, day))
                         print(stocks_data[stock_name][day])
                         print(avg_volume)
+                        print(stocks_data[stock_name][day]['volume'] <= avg_volume)
+                        print(self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']))
+                        print(stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'])
+                        print(stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150'])
+                        print(stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200'])
                         print('---{} {}'.format(stock_name, day))
 
-                        if stocks_data[stock_name][day]['volume'] <= avg_volume and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150'] >= stocks_data[stock_name][day]['ma_200']:
+                        if stocks_data[stock_name][day]['volume'] <= avg_volume and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'] and (stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150'] or stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200']):
                             qualified_days += 1
 
                 if blocked:
@@ -679,11 +713,12 @@ class StockUtil(Util):
                     print('self.rs: {}'.format(self.rs))
                     print('self.rs_counter: {}'.format(self.rs_counter))
                     print('today: {}'.format(stocks_data[stock_name][days[-1]]['index']))
-                    print('yesterday: {}'.format(stocks_data[stock_name][days[-2]]['index']))
+                    if days[-2] in stocks_data[stock_name]:
+                        print('yesterday: {}'.format(stocks_data[stock_name][days[-2]]['index']))
                     print('first day: {}'.format(stocks_data[stock_name][days[0]]['index']))
+                    print('qualified_days: {}'.format(qualified_days))
 
-                    if stocks_data[stock_name][days[-1]]['volume'] <= avg_volume and qualified_days >= len(days) * 0.8: #and volume_base > 0 and volumes_list[0] / volume_base >= 1.45 :
-                        print('qualified_days: {}'.format(qualified_days))
+                    if stocks_data[stock_name][days[-1]]['volume'] <= avg_volume and qualified_days >= len(days) * self.qualified_days_ratio: #and volume_base > 0 and volumes_list[0] / volume_base >= 1.45 :
                         good_stock_names.append({'stock_name': stock_name, 'rs': rs})
 
                 print('---' + stock_name + '---')
