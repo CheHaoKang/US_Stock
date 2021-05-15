@@ -11,6 +11,7 @@ if __name__ == "__main__":
     if not stock_util.test:
         stock_util.update_proxy()
 
+    # if interrupted, comment out this block
     if not stock_util.test:
         source_dir = 'GICS'
         finished_dir = 'GICS/finished'

@@ -139,7 +139,7 @@ class MysqlUtil(Util):
 
 
 class StockUtil(Util):
-    insert_index_volume_sql = 'INSERT INTO index_volume (`date`, stock_id, `index`, volume) VALUES(%s, %s, %s, %s) ON DUPLICATE KEY UPDATE `index` = VALUES(`index`), volume = VALUES(volume)'
+    insert_index_volume_sql = 'INSERT INTO index_volume (`date`, stock_id, volume, `index`, index_open, index_low, index_high) VALUES(%s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE `index` = VALUES(`index`), index_open = VALUES(index_open), index_low = VALUES(index_low), index_high = VALUES(index_high), volume = VALUES(volume)'
     qualified_days_ratio = 0.6
     rs_ratio = 0.3
     num_days = 30
@@ -247,7 +247,9 @@ class StockUtil(Util):
         return ''
 
     def insert_index_volume(self, date, stock_id, index, volume):
-        self.cursor.execute(self.insert_index_volume_sql, (date, stock_id, index, volume))
+        data = [date, stock_id, volume]
+        data.extend(map(lambda i: index[i], ['index', 'index_open', 'index_low', 'index_high']))
+        self.cursor.execute(self.insert_index_volume_sql, tuple(data))
         self.conn.commit()
 
     def get_index_volume(self, path):
@@ -306,7 +308,7 @@ class StockUtil(Util):
                                     dt = self.to_ymd(row['Date'])
                                     idx = float(str(row['Close']).replace('$', '').replace(',', ''))
                                     volume = self.transform_m_b_to_number(row['Volume'].replace(',', ''))
-                                    rows.append((dt, stock_id, idx, volume))
+                                    rows.append((dt, stock_id, volume, idx))
                                 print(rows)
                                 self.cursor.executemany(self.insert_index_volume_sql, rows)
                                 self.conn.commit()
@@ -459,7 +461,13 @@ class StockUtil(Util):
             "Authorization": "Bearer {}".format(token),
             "Content-Type": "application/x-www-form-urlencoded"
         }
-        params = { "message": "[{}] {}".format(group, ', '.join(good_stock_names)) if group else "=== {} ===".format(date.today()) }
+        if group:
+            msg = "[{}] {}".format(group, ', '.join(good_stock_names))
+        elif not self.test:
+            msg = "=== {} ===".format(date.today())
+        else:
+            return False
+        params = { "message": msg }
 
         try:
             r = requests.post("https://notify-api.line.me/api/notify", headers=headers, params=params)
@@ -602,6 +610,7 @@ class StockUtil(Util):
     def get_index_volume_from_html(self, html, day):
         soup = BeautifulSoup(html, 'html.parser')
         counter = 1
+
         while True:
             try:
                 tr = soup.find("div", {"class": "download-data"}).select('tr')[counter]
@@ -609,18 +618,17 @@ class StockUtil(Util):
                 page_day = self.to_ymd(tr.select('td')[0].select('div')[0].text, '/')
                 if page_day == day:
                     pass
-                elif self.to_ymd(tr.select('td')[0].select('div')[0].text, '/') < day:
+                elif page_day > day:
                     counter += 1
                     continue
                 else:
                     return False, None, None
 
-                index = tr.select('td')[4].text.replace('$', '').replace(',', '')
-                index = float(index)
+                index_open, index_high, index_low, index = map(lambda i: float(tr.select('td')[i].text.replace('$', '').replace(',', '')), [1, 2, 3, 4])
                 volume = tr.select('td')[5].text.replace(',', '')
                 volume = self.transform_m_b_to_number(volume)
 
-                return True, index, volume
+                return True, { 'index_open': index_open, 'index_high': index_high, 'index_low': index_low, 'index': index }, volume
             except:
                 traceback.print_exc()
                 time.sleep(1)
@@ -673,8 +681,8 @@ class StockUtil(Util):
             print('***' + stock_name + '***')
             stock_id = self.get_stock_id(stock_name)
 
-            self.cursor.execute("SELECT `date`, `index`, volume, ma_50, ma_150, ma_200 FROM index_volume WHERE stock_id = %s AND `date` >= %s AND `date` <= %s", (stock_id, days[0], days[-1]))
             stocks_data = {}
+            self.cursor.execute("SELECT `date`, `index`, volume, ma_50, ma_150, ma_200 FROM index_volume WHERE stock_id = %s AND `date` >= %s AND `date` <= %s", (stock_id, days[0], days[-1]))
             for row in self.cursor.fetchall():
                 if stock_name not in stocks_data:
                     stocks_data[stock_name] = { row['date']: {} }
@@ -710,7 +718,8 @@ class StockUtil(Util):
                         elif html != -1:
                             connection_error = 0
 
-                            success, index, volume = self.get_index_volume_from_html(html, day)
+                            success, index_dict, volume = self.get_index_volume_from_html(html, day)
+                            print(index_dict)
                             if not success:
                                 counter = self.RETRY
                                 break
@@ -720,10 +729,10 @@ class StockUtil(Util):
                                 stocks_data[stock_name] = { day: {} }
                             elif day not in stocks_data[stock_name]:
                                 stocks_data[stock_name][day] = {}
-                            stocks_data[stock_name][day]['index'] = index
+                            stocks_data[stock_name][day]['index'] = index_dict['index']
                             stocks_data[stock_name][day]['volume'] = volume
 
-                            self.insert_index_volume(day, stock_id, index, volume)
+                            self.insert_index_volume(day, stock_id, index_dict, volume)
                             ma = {}
                             for ma_days in [50, 150, 200]:
                                 if ma_days not in ma or ma[ma_days] == 0:
