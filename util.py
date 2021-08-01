@@ -105,6 +105,15 @@ class Util:
         dt = dt.split(sep)
         return "{}-{}-{}".format(dt[2], dt[0], dt[1])
 
+    def last_weekdays(self):
+        import datetime
+        today = datetime.date.today()
+        idx = (today.weekday() + 1) % 7
+        sat = today - datetime.timedelta(7 + idx - 6)
+        sun = today - datetime.timedelta(7 + idx - 7)
+
+        return sat, sun
+
 
 class MysqlUtil(Util):
     def __init__(self, conn=None, cursor=None):
@@ -463,7 +472,7 @@ class StockUtil(Util):
         }
         if group:
             msg = "[{}] {}".format(group, ', '.join(good_stock_names))
-        elif not self.test:
+        elif not (self.test or self.stagnate):
             msg = "=== {} ===".format(date.today())
         else:
             return False
@@ -532,12 +541,12 @@ class StockUtil(Util):
     def insert_ma(self, stock_id, date, ma=None):
         if not ma:
             ma = {}
-        for ma_days in [50, 150, 200]:
+        for ma_days in [5, 10, 20, 60, 50, 150, 200]:
             if ma_days not in ma:
                 ma[ma_days] = self.compute_ma(ma_days, stock_id, date)
 
-        update_ma_sql = 'UPDATE index_volume SET ma_50 = %s, ma_150 = %s, ma_200 = %s WHERE stock_id = %s AND date = %s'
-        self.cursor.execute(update_ma_sql, (ma[50], ma[150], ma[200], stock_id, date))
+        update_ma_sql = 'UPDATE index_volume SET ma_5 = %s, ma_10 = %s, ma_20 = %s, ma_60 = %s, ma_50 = %s, ma_150 = %s, ma_200 = %s WHERE stock_id = %s AND date = %s'
+        self.cursor.execute(update_ma_sql, (ma[5], ma[10], ma[20], ma[60], ma[50], ma[150], ma[200], stock_id, date))
         self.conn.commit()
 
     def retrospect_ma(self, stock_id=None, days=None):
@@ -565,7 +574,7 @@ class StockUtil(Util):
         self.cursor.execute('''
             SELECT stock_id, MAX(`date`) zero_date
             FROM index_volume
-            WHERE ma_50 = 0 AND ma_150 = 0 AND ma_200 = 0
+            WHERE ma_5 = 0 OR ma_10 = 0 OR ma_20 = 0 OR ma_60 = 0 OR ma_50 = 0 OR ma_150 = 0 OR ma_200 = 0
             {}
             GROUP BY stock_id
         '''.format('AND stock_id = ' . self.conn.escape(stock_id) if stock_id else ''))
@@ -649,7 +658,7 @@ class StockUtil(Util):
                     stock_name = stock_url.split('/')[-1]
                     yield stock_name
 
-    def is_stagnate_stock(self, stock_name):
+    def compute_min_max_avg(self, stock_name):
         get_index_sql = '''
             SELECT MIN(`index`) min, MAX(`index`) max , AVG(`index`) avg
             FROM (
@@ -664,8 +673,60 @@ class StockUtil(Util):
 
         stock_id = self.get_stock_id(stock_name)
         self.cursor.execute(get_index_sql, (stock_id, datetime.strftime(self.today, '%Y-%m-%d'), self.num_days))
-        row = self.cursor.fetchone()
+        return self.cursor.fetchone()
+
+    def is_stagnate_stock(self, stock_name):
+        row = self.compute_min_max_avg(stock_name)
+
         return True if row['min'] and row['min'] >= row['avg'] * (1 - self.stagnate_ratio) and row['max'] <= row['avg'] * (1 + self.stagnate_ratio) else False
+
+    def find_stagnate_stocks(self, file_name):
+        blocked_files = ['消費信貸', '綜閤消費者服務', '互助儲蓄銀行與', '綜閤金融服務', '保險', '股權房地産投資', '商業銀行', '抵押房地産投資', '房地産管理和開', '資本市場', '股權房地産投資']
+        if list(filter(lambda f: f in file_name, blocked_files)):
+            return
+
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d") #'2021-06-19'
+        tmp_num_days = self.num_days
+        self.num_days = 90
+        if not hasattr(self, 'today'):
+            import pandas as pd
+            self.today = pd.datetime.today()
+        blocked_stocks = self.get_blocked_stocks()
+        stocks = []
+        rows = []
+
+        # last_sat, last_sun = self.last_weekdays()
+        for stock_name in self.yield_stock_names(file_name):
+            if stock_name in blocked_stocks:
+                continue
+
+            if self.stagnate:
+                get_sql = '''
+                    SELECT 1
+                    FROM stagnating_stock
+                    WHERE date BETWEEN CURDATE() - INTERVAL 18 DAY AND CURDATE() - INTERVAL 6 DAY
+                    AND WEEKDAY(date) IN (5, 6)
+                    AND stock_name = %s
+                    AND type = 'weekly'
+                '''
+                self.cursor.execute(get_sql, (stock_name))
+                is_stagnating_stock = self.cursor.fetchone()
+
+            stock_id = self.get_stock_id(stock_name)
+            year_max, year_min = self.get_one_year_max_min_index(stock_id)
+            row = self.compute_min_max_avg(stock_name)
+            if row and abs(row['avg'] - year_min) / year_min < 0.3:
+                if not (self.stagnate and is_stagnating_stock):
+                    stocks.append(stock_name)
+                rows.append((today, stock_name, 'weekly' if self.stagnate else 'daily'))
+
+        insert_sql = 'INSERT IGNORE INTO stagnating_stock (`date`, stock_name, `type`) VALUES(%s, %s, %s)'
+        self.cursor.executemany(insert_sql, rows)
+        self.conn.commit()
+
+        self.num_days = tmp_num_days
+        return stocks
 
     def get_stock_daily(self, file_name):
         days = self.get_stock_days(self.num_days)
@@ -682,14 +743,14 @@ class StockUtil(Util):
             stock_id = self.get_stock_id(stock_name)
 
             stocks_data = {}
-            self.cursor.execute("SELECT `date`, `index`, volume, ma_50, ma_150, ma_200 FROM index_volume WHERE stock_id = %s AND `date` >= %s AND `date` <= %s", (stock_id, days[0], days[-1]))
+            self.cursor.execute("SELECT `date`, `index`, volume, ma_5, ma_10, ma_20, ma_60, ma_50, ma_150, ma_200 FROM index_volume WHERE stock_id = %s AND `date` >= %s AND `date` <= %s", (stock_id, days[0], days[-1]))
             for row in self.cursor.fetchall():
                 if stock_name not in stocks_data:
                     stocks_data[stock_name] = { row['date']: {} }
                 elif row['date'] not in stocks_data[stock_name]:
                     stocks_data[stock_name][row['date']] = {}
 
-                for key in ['index', 'volume', 'ma_50', 'ma_150', 'ma_200']:
+                for key in ['index', 'volume',  'ma_5', 'ma_10', 'ma_20', 'ma_60', 'ma_50', 'ma_150', 'ma_200']:
                     stocks_data[stock_name][row['date']][key] = row[key]
 
             url = "https://www.marketwatch.com/investing/stock/" + stock_name + "/download-data"
@@ -734,7 +795,7 @@ class StockUtil(Util):
 
                             self.insert_index_volume(day, stock_id, index_dict, volume)
                             ma = {}
-                            for ma_days in [50, 150, 200]:
+                            for ma_days in [5, 10, 20, 60, 50, 150, 200]:
                                 if ma_days not in ma or ma[ma_days] == 0:
                                     ma[ma_days] = stocks_data[stock_name][day]['ma_{}'.format(ma_days)] = self.compute_ma(ma_days, stock_id, day)
                             self.insert_ma(stock_id, day, ma)
@@ -764,7 +825,12 @@ class StockUtil(Util):
                     print("ma_50 bigger than ma_200: {}".format(stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200']))
                     print('---{} {}'.format(stock_name, day))
 
-                    if stocks_data[stock_name][day]['volume'] <= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'] * self.ratio_ma50 and (stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150'] or stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200']):
+                    # if stocks_data[stock_name][day]['volume'] <= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'] * self.ratio_ma50 and (stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150'] or stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200']):
+                    #     qualified_days += 1
+
+                    day_minus_one = (datetime.strptime(day, '%Y-%m-%d') - timedelta(1)).strftime("%Y-%m-%d")
+                    day_minus_one_ma_60 = stocks_data[stock_name][day_minus_one]['ma_60'] if day_minus_one in stocks_data[stock_name] and 'ma_60' in stocks_data[stock_name][day_minus_one] else 0
+                    if stocks_data[stock_name][day]['volume'] >= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_5'] and stocks_data[stock_name][day]['ma_5'] >= stocks_data[stock_name][day]['ma_10'] and stocks_data[stock_name][day]['ma_20'] >= stocks_data[stock_name][day]['ma_60'] and stocks_data[stock_name][day]['ma_60'] > day_minus_one_ma_60:
                         qualified_days += 1
 
             if blocked and not self.test:
@@ -791,8 +857,12 @@ class StockUtil(Util):
                 print('first day: {}'.format(stocks_data[stock_name][day_keys[0]]['index']))
                 print('qualified_days: {}'.format(qualified_days))
 
-                if stocks_data[stock_name][day_keys[-1]]['volume'] <= float(avg_volume) * self.volume_ratio and qualified_days >= len(day_keys) * self.qualified_days_ratio: # volume_base > 0 and volumes_list[0] / volume_base >= 1.45 :
+                # if stocks_data[stock_name][day_keys[-1]]['volume'] <= float(avg_volume) * self.volume_ratio and qualified_days >= len(day_keys) * self.qualified_days_ratio: # volume_base > 0 and volumes_list[0] / volume_base >= 1.45 :
+                    # good_stock_names.append({'stock_name': stock_name, 'rs': rs})
+
+                if 2 <= qualified_days <= 5:
                     good_stock_names.append({'stock_name': stock_name, 'rs': rs})
+
 
             print('---' + stock_name + '---')
 
