@@ -82,7 +82,6 @@ class Util:
                 break
             except requests.ConnectionError:
                 connection_error += 1
-                sys.exit(1)
             except requests.TooManyRedirects:
                 pass
             except:
@@ -93,6 +92,7 @@ class Util:
             print('Failed retrying!')
 
             if connection_error >= self.RETRY:
+                sys.exit(1)
                 return 'connection_error'
             return -1
         else:
@@ -262,8 +262,9 @@ class StockUtil(Util):
         self.conn.commit()
 
     def get_index_volume(self, path):
-        # cursor.execute('SELECT stock_name FROM stock_list')
-        # all_stock_names = [ stock_name['stock_name'] for stock_name in cursor.fetchall() ]
+        self.cursor.execute('SELECT stock_name FROM stock_list')
+        all_stock_names = [ stock_name['stock_name'] for stock_name in self.cursor.fetchall() ]
+        self.new_stocks = []
 
         url = 'https://www.marketwatch.com/investing/stock/{0}/download-data'
 
@@ -284,8 +285,11 @@ class StockUtil(Util):
                                 continue
 
                             stock_name = col.split('/')[-1]
-                            # if stock_name in all_stock_names:
-                            #     continue
+                            if not stock_name:
+                                continue
+                            elif stock_name in all_stock_names:
+                                print("Skipped {}...".format(stock_name))
+                                continue
                             print("Processing {}".format(stock_name))
 
                             download_link = None
@@ -308,6 +312,7 @@ class StockUtil(Util):
 
                             stock_id = self.get_stock_id(stock_name)
                             print("stock_id: {}".format(stock_id))
+                            self.new_stocks.append(stock_id)
 
                             try:
                                 content = self.html_get(download_link)
@@ -316,8 +321,11 @@ class StockUtil(Util):
                                 for _, row in df.iterrows():
                                     dt = self.to_ymd(row['Date'])
                                     idx = float(str(row['Close']).replace('$', '').replace(',', ''))
+                                    idx_open = float(str(row['Open']).replace('$', '').replace(',', ''))
+                                    idx_low = float(str(row['Low']).replace('$', '').replace(',', ''))
+                                    idx_high = float(str(row['High']).replace('$', '').replace(',', ''))
                                     volume = self.transform_m_b_to_number(row['Volume'].replace(',', ''))
-                                    rows.append((dt, stock_id, volume, idx))
+                                    rows.append((dt, stock_id, volume, idx, idx_open, idx_low, idx_high))
                                 print(rows)
                                 self.cursor.executemany(self.insert_index_volume_sql, rows)
                                 self.conn.commit()
@@ -440,7 +448,7 @@ class StockUtil(Util):
                 soup = BeautifulSoup(driver.page_source, 'html.parser')
                 categories = {}
                 for ele in soup.find_all('i', {'class' : 'list-style'}):
-                    if re.search("GICS行业", ele.parent.text):
+                    if re.search("明星股", ele.parent.text):
                         for li in ele.parent.find_all('li'):
                             key = HanziConv.toTraditional(li.text).strip()
                             link = "https://xueqiu.com/hq{}".format(li.select('a')[0]['href'].strip())
@@ -457,7 +465,7 @@ class StockUtil(Util):
     def renew_categories_index_volume(self):
         self.get_Xueqiu_categories()
         self.get_index_volume('.' if self.test else 'GICS')
-        self.retrospect_ma(365)
+        self.retrospect_ma(stock_id=None, days=365)
 
     def line_notify(self, group=None, good_stock_names=None):
         from datetime import date
@@ -485,7 +493,11 @@ class StockUtil(Util):
             traceback.print_exc()
 
     def get_stock_days(self, num_days=20):
-        skip_dates = [ '2020-11-26', '2020-12-25', '2021-01-01', '2021-01-18', '2021-02-15', '2021-04-02', '2021-05-31', '2021-07-05', '2021-09-06', '2021-11-25', '2021-12-24' ]
+        skip_dates = [ '2020-11-26', '2020-12-25', '2021-01-01', '2021-01-18', '2021-02-15', '2021-04-02', '2021-05-31', '2021-07-05', '2021-09-06', '2021-11-25', '2021-12-24', '2022-01-17', '2022-02-21', '2022-04-15', '2022-05-30', '2022-06-20', '2022-07-04', '2022-09-05', '2022-10-11', '2022-11-11', '2022-11-24', '2022-11-25', '2022-12-26', '2023-01-02' ]
+
+        from datetime import datetime, timedelta
+        if datetime.strftime(datetime.now() - timedelta(1), '%Y-%m-%d') in skip_dates:
+            return []
 
         import pandas as pd
         from pandas.tseries.offsets import BDay
@@ -566,6 +578,9 @@ class StockUtil(Util):
         '''.format(stock_id_sql))
         for row in self.cursor.fetchall():
             stock_id = row['stock_id']
+            if hasattr(self, 'new_stocks') and stock_id not in self.new_stocks:
+                print('Skipped computing ma for {}...'.format(stock_id))
+                continue
             print('=== Computing ma: {}({}) ==='.format(row['stock_name'], stock_id))
             for dt in list(filter(lambda d: d <= zero_ma_date[stock_id], days)):
                 self.insert_ma(stock_id, dt)
@@ -577,7 +592,7 @@ class StockUtil(Util):
             WHERE ma_5 = 0 OR ma_10 = 0 OR ma_20 = 0 OR ma_60 = 0 OR ma_50 = 0 OR ma_150 = 0 OR ma_200 = 0
             {}
             GROUP BY stock_id
-        '''.format('AND stock_id = ' . self.conn.escape(stock_id) if stock_id else ''))
+        '''.format('AND stock_id = ' + self.conn.escape(stock_id) if stock_id else ''))
 
         return { row['stock_id']: row['zero_date'] for row in self.cursor.fetchall() }
 
@@ -604,7 +619,7 @@ class StockUtil(Util):
                 FROM index_volume
                 WHERE stock_id = %s
                 ORDER BY `date` DESC
-                LIMIT 250
+                LIMIT 260
             ) t
         ''', (stock_id))
         row = self.cursor.fetchone()
@@ -701,6 +716,8 @@ class StockUtil(Util):
             if stock_name in blocked_stocks:
                 continue
 
+            stock_id = self.get_stock_id(stock_name)
+            is_qualified = 1
             if self.stagnate:
                 get_sql = '''
                     SELECT 1
@@ -713,10 +730,26 @@ class StockUtil(Util):
                 self.cursor.execute(get_sql, (stock_name))
                 is_stagnating_stock = self.cursor.fetchone()
 
-            stock_id = self.get_stock_id(stock_name)
+                get_sql = '''
+                    SELECT SUM(`index` > ma_50), SUM(ma_50 > IFNULL(ma_150, 0)), SUM(ma_50 > IFNULL(ma_200, 0))#, SUM(IFNULL(ma_150, 0) > IFNULL(ma_200, 0))
+                    FROM (
+                        SELECT `index`, ma_50, ma_150, ma_200
+                        FROM index_volume
+                        WHERE stock_id = %s
+                        ORDER BY date DESC
+                        LIMIT %s
+                    ) t
+                '''
+                self.cursor.execute(get_sql, (stock_id, self.num_days))
+                criterions = self.cursor.fetchone()
+                for criterion in criterions.keys():
+                    if criterions[criterion] <= self.num_days / 2:
+                        is_qualified = 0
+                        break
+
             year_max, year_min = self.get_one_year_max_min_index(stock_id)
             row = self.compute_min_max_avg(stock_name)
-            if row and abs(row['avg'] - year_min) / year_min < 0.3:
+            if is_qualified and row and year_min and abs(row['avg'] - year_min) / year_min < 0.3:
                 if not (self.stagnate and is_stagnating_stock):
                     stocks.append(stock_name)
                 rows.append((today, stock_name, 'weekly' if self.stagnate else 'daily'))
@@ -741,6 +774,8 @@ class StockUtil(Util):
 
             print('***' + stock_name + '***')
             stock_id = self.get_stock_id(stock_name)
+            # self.insert_ma(stock_id, '2022-01-14')
+            # continue
 
             stocks_data = {}
             self.cursor.execute("SELECT `date`, `index`, volume, ma_5, ma_10, ma_20, ma_60, ma_50, ma_150, ma_200 FROM index_volume WHERE stock_id = %s AND `date` >= %s AND `date` <= %s", (stock_id, days[0], days[-1]))
@@ -825,13 +860,13 @@ class StockUtil(Util):
                     print("ma_50 bigger than ma_200: {}".format(stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200']))
                     print('---{} {}'.format(stock_name, day))
 
-                    # if stocks_data[stock_name][day]['volume'] <= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'] * self.ratio_ma50 and (stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150'] or stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200']):
-                    #     qualified_days += 1
-
-                    day_minus_one = (datetime.strptime(day, '%Y-%m-%d') - timedelta(1)).strftime("%Y-%m-%d")
-                    day_minus_one_ma_60 = stocks_data[stock_name][day_minus_one]['ma_60'] if day_minus_one in stocks_data[stock_name] and 'ma_60' in stocks_data[stock_name][day_minus_one] else 0
-                    if stocks_data[stock_name][day]['volume'] >= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_5'] and stocks_data[stock_name][day]['ma_5'] >= stocks_data[stock_name][day]['ma_10'] and stocks_data[stock_name][day]['ma_20'] >= stocks_data[stock_name][day]['ma_60'] and stocks_data[stock_name][day]['ma_60'] > day_minus_one_ma_60:
+                    if stocks_data[stock_name][day]['volume'] <= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'] * self.ratio_ma50 and (stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150'] or stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200']):
                         qualified_days += 1
+
+                    ### day_minus_one = (datetime.strptime(day, '%Y-%m-%d') - timedelta(1)).strftime("%Y-%m-%d")
+                    ### day_minus_one_ma_60 = stocks_data[stock_name][day_minus_one]['ma_60'] if day_minus_one in stocks_data[stock_name] and 'ma_60' in stocks_data[stock_name][day_minus_one] else 0
+                    ### if stocks_data[stock_name][day]['volume'] >= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_5'] and stocks_data[stock_name][day]['ma_5'] >= stocks_data[stock_name][day]['ma_10'] and stocks_data[stock_name][day]['ma_20'] >= stocks_data[stock_name][day]['ma_60'] and stocks_data[stock_name][day]['ma_60'] > day_minus_one_ma_60:
+                    ###     qualified_days += 1
 
             if blocked and not self.test:
                 print("Add {} into blocked list".format(stock_name))
@@ -857,10 +892,8 @@ class StockUtil(Util):
                 print('first day: {}'.format(stocks_data[stock_name][day_keys[0]]['index']))
                 print('qualified_days: {}'.format(qualified_days))
 
-                # if stocks_data[stock_name][day_keys[-1]]['volume'] <= float(avg_volume) * self.volume_ratio and qualified_days >= len(day_keys) * self.qualified_days_ratio: # volume_base > 0 and volumes_list[0] / volume_base >= 1.45 :
-                    # good_stock_names.append({'stock_name': stock_name, 'rs': rs})
-
-                if 2 <= qualified_days <= 5:
+                if stocks_data[stock_name][day_keys[-1]]['volume'] <= float(avg_volume) * self.volume_ratio and qualified_days >= len(day_keys) * self.qualified_days_ratio: # volume_base > 0 and volumes_list[0] / volume_base >= 1.45 :
+                ### if 2 <= qualified_days <= 5:
                     good_stock_names.append({'stock_name': stock_name, 'rs': rs})
 
 

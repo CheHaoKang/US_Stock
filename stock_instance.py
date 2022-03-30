@@ -2,27 +2,45 @@ import os
 from util import StockUtil, MysqlUtil
 import shutil
 import sys
+import time
+
+def move_directory(source, destination):
+    for file_name in os.listdir(source):
+        if file_name.endswith(".csv"):
+            shutil.move(os.path.join(source, file_name), destination)
 
 if __name__ == "__main__":
     stock_util = StockUtil()
     mysql_util = MysqlUtil(stock_util.conn, stock_util.cursor)
 
     stock_util.test = 0
-    stock_util.stagnate = 1 if len(sys.argv) >= 2 and sys.argv[1] == '--stagnate' else 0
+    # stock_util.stagnate = 1 if len(sys.argv) >= 2 and sys.argv[1] == '--stagnate' else 0
+    stock_util.stagnate = 0
+    stock_util.get_new_stocks = 0
+
+    if stock_util.get_new_stocks:
+        if os.path.exists('GICS/backup'):
+            shutil.rmtree('GICS/backup')
+        os.makedirs('GICS/backup')
+        move_directory('GICS', 'GICS/backup')
+        stock_util.renew_categories_index_volume()
+        shutil.rmtree('GICS/finished')
+
+        sys.exit(0)
 
     if not (stock_util.test or stock_util.stagnate):
         stock_util.update_proxy()
 
     # if interrupted, comment out this block
     if not stock_util.test:
-        source_dir = 'GICS'
-        finished_dir = 'GICS/finished'
-        for file_name in os.listdir(finished_dir):
-            if file_name.endswith(".csv"):
-                shutil.move(os.path.join(finished_dir, file_name), source_dir)
+        move_directory('GICS/finished', 'GICS')
 
     folder = '.' if stock_util.test else 'GICS'
     if True:
+        if not stock_util.get_stock_days():
+            print('Stock market closed yesterday.')
+            sys.exit(0)
+
         stock_util.line_notify()
         for filename in os.listdir(folder):
             if not filename.endswith(('test' if stock_util.test else '') + ".csv"):
@@ -38,6 +56,7 @@ if __name__ == "__main__":
             else:
                 stagnating_stocks = stock_util.find_stagnate_stocks('{}/{}'.format(folder, filename))
                 good_stock_names = stock_util.get_stock_daily('{}/{}'.format(folder, filename))
+                # continue
                 print('rs: {}'.format(stock_util.rs))
                 print('rs_counter: {}'.format(stock_util.rs_counter))
                 if stock_util.rs_counter:
@@ -72,9 +91,6 @@ if __name__ == "__main__":
                 if not stock_util.test:
                     os.rename('GICS/' + filename, 'GICS/finished/' + filename)
             print("--- Finished {} ---".format(filename))
-    else:
-        stock_util.get_index_volume(folder)
-        stock_util.retrospect_ma(stock_id=None, days=60)
 
     # stock_util.renew_categories_index_volume()
     # stock_util.retrieve_zero_ma_date()
