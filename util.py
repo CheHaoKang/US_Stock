@@ -9,24 +9,26 @@ import random
 import traceback
 import re
 import json
-import sys, os
+import sys
+import os
+
 
 class Util:
     RETRY = 3
     REQUEST_TIMEOUT = 6
     FETCH_TIMEOUT_FROM = 1
     FETCH_TIMEOUT_TO = 2
-    PROXIES = [ '167.71.5.83:8080', '139.59.1.14:3128', '138.68.60.8:8080', '175.141.69.200:80', '165.227.83.185:3128', '154.16.63.16:3128', '5.252.161.48:3128', '154.16.202.22:3128', '161.35.70.249:8080', '89.187.177.105:80', '191.96.71.118:3128', '89.187.177.99:80', '203.202.245.62:80', '89.187.177.91:80', '89.187.177.92:80', '89.187.177.85:80', '115.243.116.151:80', '136.233.220.215:80', '46.4.96.137:3128', '195.146.50.22:3128', '35.235.115.241:80', '23.105.225.150:80', '88.198.50.103:8080', '51.81.113.246:80', '139.162.78.109:8080', '88.198.24.108:8080', '68.94.189.60:80', '203.202.245.58:80', '176.9.75.42:8080', '78.47.16.54:80', '198.199.86.11:8080', '128.199.202.122:8080', '209.97.150.167:8080', '134.209.29.120:3128', '159.203.61.169:3128', '191.96.42.80:8080', '176.9.119.170:8080', '102.129.249.120:8080' ] # https://free-proxy-list.net/
+    PROXIES = [ '167.71.5.83:8080', '139.59.1.14:3128', '138.68.60.8:8080', '175.141.69.200:80', '165.227.83.185:3128', '154.16.63.16:3128', '5.252.161.48:3128', '154.16.202.22:3128', '161.35.70.249:8080', '89.187.177.105:80', '191.96.71.118:3128', '89.187.177.99:80', '203.202.245.62:80', '89.187.177.91:80', '89.187.177.92:80', '89.187.177.85:80', '115.243.116.151:80', '136.233.220.215:80', '46.4.96.137:3128', '195.146.50.22:3128', '35.235.115.241:80', '23.105.225.150:80', '88.198.50.103:8080', '51.81.113.246:80', '139.162.78.109:8080', '88.198.24.108:8080', '68.94.189.60:80', '203.202.245.58:80', '176.9.75.42:8080', '78.47.16.54:80', '198.199.86.11:8080', '128.199.202.122:8080', '209.97.150.167:8080', '134.209.29.120:3128', '159.203.61.169:3128', '191.96.42.80:8080', '176.9.119.170:8080', '102.129.249.120:8080' ]  # https://free-proxy-list.net/
 
     def __init__(self):
         pass
 
     def nested_dict(self):
-       return defaultdict(self.nested_dict)
+        return defaultdict(self.nested_dict)
 
     def print_nested_dict(self, nd):
-       import json
-       print(json.loads(json.dumps(nd)))
+        import json
+        print(json.loads(json.dumps(nd)))
 
     def connect(self, host='http://google.com'):
         import urllib.request
@@ -45,6 +47,7 @@ class Util:
 
     def update_proxy(self):
         from selenium import webdriver
+        from selenium.webdriver.common.by import By
         from webdriver_manager.chrome import ChromeDriverManager
 
         self.PROXIES = []
@@ -55,8 +58,8 @@ class Util:
                 driver.implicitly_wait(10)
                 driver.get('https://free-proxy-list.net/')
 
-                driver.find_element_by_class_name('fa-clipboard').click()
-                for line in driver.find_element_by_class_name('modal-body').find_element_by_class_name('form-control').get_attribute('value').split('\n'):
+                driver.find_element(By.CLASS_NAME, 'fa-clipboard').click()
+                for line in driver.find_element(By.CLASS_NAME, 'modal-body').find_element(By.CLASS_NAME, 'form-control').get_attribute('value').split('\n'):
                     line = line.strip()
                     if re.match("\d+\.\d+\.\d+\.\d+:\d+", line, re.I):
                         self.PROXIES.append(line)
@@ -74,7 +77,7 @@ class Util:
         while counter < self.RETRY:
             counter += 1
             try:
-                header = {'User-Agent': generate_user_agent()}
+                header = { 'User-Agent': generate_user_agent() }
                 if use_proxy:
                     proxies = self.get_proxy()
                     print("PROXY => {:}".format(proxies))
@@ -208,8 +211,8 @@ class StockUtil(Util):
         return float(num)*sign
 
     def get_stock_id(self, stock_name):
-        select_stock_id_sql     = 'SELECT id FROM stock_list WHERE stock_name = %s'
-        insert_stock_name_sql   = 'INSERT INTO stock_list (stock_name) VALUES(%s)'
+        select_stock_id_sql = 'SELECT id FROM stock_list WHERE stock_name = %s'
+        insert_stock_name_sql = 'INSERT INTO stock_list (stock_name) VALUES(%s)'
 
         self.cursor.execute(select_stock_id_sql, (stock_name))
         stock_id = self.cursor.fetchone()
@@ -230,8 +233,8 @@ class StockUtil(Util):
             'Referer': 'http://xueqiu.com/p/ZH010389',
             'User-Agent': 'Mozilla/5.0 (Windows NT 6.2; WOW64; rv:38.0) Gecko/20100101 Firefox/38.0',
             'Host': 'xueqiu.com',
-            #'Connection':'keep-alive',
-            #'Accept':'*/*',
+            # 'Connection':'keep-alive',
+            # 'Accept':'*/*',
             'cookie':'s=iabht2os.1dgjn9z; xq_a_token=02a16c8dd2d87980d1b3ddced673bd6a74288bde; xq_r_token=024b1e233fea42dd2e0a74832bde2c914ed30e79; __utma=1.2130135756.1433017807.1433017807.1433017807.1;'
             '__utmc=1; __utmz=1.1433017807.1.1.utmcsr=(direct)|utmccn=(direct)|utmcmd=(none); Hm_lvt_1db88642e346389874251b5a1eded6e3=1433017809; Hm_lpvt_1db88642e346389874251b5a1eded6e3=1433017809'
         }
@@ -447,7 +450,7 @@ class StockUtil(Util):
 
                 soup = BeautifulSoup(driver.page_source, 'html.parser')
                 categories = {}
-                for ele in soup.find_all('i', {'class' : 'list-style'}):
+                for ele in soup.find_all('i', { 'class': 'list-style' }):
                     if re.search("明星股", ele.parent.text):
                         for li in ele.parent.find_all('li'):
                             key = HanziConv.toTraditional(li.text).strip()
@@ -504,7 +507,8 @@ class StockUtil(Util):
         if not self.test:
             today = self.today = pd.datetime.today()
         else:
-            today = pd.to_datetime(input("Enter date: ")) #pd.to_datetime('2020-10-29')
+            # pd.to_datetime('2020-10-29')
+            today = pd.to_datetime(input("Enter date: "))
             today += BDay(1)
             self.today = today
         days = []
@@ -701,7 +705,7 @@ class StockUtil(Util):
             return
 
         from datetime import datetime
-        today = datetime.now().strftime("%Y-%m-%d") #'2021-06-19'
+        today = datetime.now().strftime("%Y-%m-%d") # '2021-06-19'
         tmp_num_days = self.num_days
         self.num_days = 90
         if not hasattr(self, 'today'):
@@ -865,7 +869,7 @@ class StockUtil(Util):
 
                     ### day_minus_one = (datetime.strptime(day, '%Y-%m-%d') - timedelta(1)).strftime("%Y-%m-%d")
                     ### day_minus_one_ma_60 = stocks_data[stock_name][day_minus_one]['ma_60'] if day_minus_one in stocks_data[stock_name] and 'ma_60' in stocks_data[stock_name][day_minus_one] else 0
-                    ### if stocks_data[stock_name][day]['volume'] >= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_5'] and stocks_data[stock_name][day]['ma_5'] >= stocks_data[stock_name][day]['ma_10'] and stocks_data[stock_name][day]['ma_20'] >= stocks_data[stock_name][day]['ma_60'] and stocks_data[stock_name][day]['ma_60'] > day_minus_one_ma_60:
+                    # if stocks_data[stock_name][day]['volume'] >= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_5'] and stocks_data[stock_name][day]['ma_5'] >= stocks_data[stock_name][day]['ma_10'] and stocks_data[stock_name][day]['ma_20'] >= stocks_data[stock_name][day]['ma_60'] and stocks_data[stock_name][day]['ma_60'] > day_minus_one_ma_60:
                     ###     qualified_days += 1
 
             if blocked and not self.test:
@@ -878,7 +882,8 @@ class StockUtil(Util):
 
             rs = 0
             day_keys = sorted(stocks_data[stock_name].keys()) if stock_name in stocks_data else []
-            if len(day_keys) >= self.num_days / 2: #len(stocks_data[stock_name]) == num_days and days[-1] in stocks_data[stock_name] and days[0] in stocks_data[stock_name]:
+            # len(stocks_data[stock_name]) == num_days and days[-1] in stocks_data[stock_name] and days[0] in stocks_data[stock_name]:
+            if len(day_keys) >= self.num_days / 2:
                 rs = (stocks_data[stock_name][day_keys[-1]]['index'] - stocks_data[stock_name][day_keys[0]]['index']) / stocks_data[stock_name][day_keys[0]]['index']
                 self.rs += rs
                 self.rs_counter += 1
@@ -892,10 +897,10 @@ class StockUtil(Util):
                 print('first day: {}'.format(stocks_data[stock_name][day_keys[0]]['index']))
                 print('qualified_days: {}'.format(qualified_days))
 
-                if stocks_data[stock_name][day_keys[-1]]['volume'] <= float(avg_volume) * self.volume_ratio and qualified_days >= len(day_keys) * self.qualified_days_ratio: # volume_base > 0 and volumes_list[0] / volume_base >= 1.45 :
-                ### if 2 <= qualified_days <= 5:
+                # volume_base > 0 and volumes_list[0] / volume_base >= 1.45 :
+                if stocks_data[stock_name][day_keys[-1]]['volume'] <= float(avg_volume) * self.volume_ratio and qualified_days >= len(day_keys) * self.qualified_days_ratio:
+                    # if 2 <= qualified_days <= 5:
                     good_stock_names.append({'stock_name': stock_name, 'rs': rs})
-
 
             print('---' + stock_name + '---')
 
