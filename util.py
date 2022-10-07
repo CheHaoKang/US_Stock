@@ -55,6 +55,7 @@ class Util:
         while retry < self.RETRY:
             try:
                 driver = webdriver.Chrome(ChromeDriverManager().install())
+                # driver = webdriver.Chrome('/Users/decken/Dropbox/Stocks/chromedriver')
                 driver.implicitly_wait(10)
                 driver.get('https://free-proxy-list.net/')
 
@@ -155,8 +156,10 @@ class StockUtil(Util):
     qualified_days_ratio = 0.6
     rs_ratio = 0.3
     num_days = 30
-    volume_ratio = 1.2
+    volume_ratio = 1.3
     ratio_ma50 = 0.92
+    ratio_ma150 = 0.92
+    ratio_ma200 = 0.92
     stagnate_ratio = 0.25
 
     def __init__(self, conn=None, cursor=None):
@@ -507,8 +510,8 @@ class StockUtil(Util):
         if not self.test:
             today = self.today = pd.datetime.today()
         else:
-            # pd.to_datetime('2020-10-29')
-            today = pd.to_datetime(input("Enter date: "))
+            # today = pd.to_datetime(input("Enter date: "))
+            today = pd.to_datetime('2020-11-10')
             today += BDay(1)
             self.today = today
         days = []
@@ -607,10 +610,11 @@ class StockUtil(Util):
                 SELECT volume
                 FROM index_volume
                 WHERE stock_id = %s
+                AND `date` < %s
                 ORDER BY date DESC
                 LIMIT %s
             ) t
-        ''', (stock_id, days))
+        ''', (stock_id, datetime.strftime(self.today, '%Y-%m-%d'), days))
         row = self.cursor.fetchone()
 
         return row['avg_volume'] if row['avg_volume'] else 0
@@ -622,10 +626,11 @@ class StockUtil(Util):
                 SELECT `index`
                 FROM index_volume
                 WHERE stock_id = %s
+                AND `date` < %s
                 ORDER BY `date` DESC
                 LIMIT 260
             ) t
-        ''', (stock_id))
+        ''', (stock_id, datetime.strftime(self.today, '%Y-%m-%d')))
         row = self.cursor.fetchone()
 
         return (row['max_index'], row['min_index'])
@@ -864,7 +869,7 @@ class StockUtil(Util):
                     print("ma_50 bigger than ma_200: {}".format(stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200']))
                     print('---{} {}'.format(stock_name, day))
 
-                    if stocks_data[stock_name][day]['volume'] <= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'] * self.ratio_ma50 and (stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150'] or stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200']):
+                    if stocks_data[stock_name][day]['volume'] <= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'] * self.ratio_ma50 and (stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150'] * self.ratio_ma150 or stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200'] * self.ratio_ma200):
                         qualified_days += 1
 
                     ### day_minus_one = (datetime.strptime(day, '%Y-%m-%d') - timedelta(1)).strftime("%Y-%m-%d")
