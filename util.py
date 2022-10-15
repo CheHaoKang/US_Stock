@@ -1,3 +1,4 @@
+from http import cookies
 from user_agent import generate_user_agent
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs, urlencode
@@ -18,7 +19,9 @@ class Util:
     REQUEST_TIMEOUT = 6
     FETCH_TIMEOUT_FROM = 1
     FETCH_TIMEOUT_TO = 2
-    PROXIES = [ '167.71.5.83:8080', '139.59.1.14:3128', '138.68.60.8:8080', '175.141.69.200:80', '165.227.83.185:3128', '154.16.63.16:3128', '5.252.161.48:3128', '154.16.202.22:3128', '161.35.70.249:8080', '89.187.177.105:80', '191.96.71.118:3128', '89.187.177.99:80', '203.202.245.62:80', '89.187.177.91:80', '89.187.177.92:80', '89.187.177.85:80', '115.243.116.151:80', '136.233.220.215:80', '46.4.96.137:3128', '195.146.50.22:3128', '35.235.115.241:80', '23.105.225.150:80', '88.198.50.103:8080', '51.81.113.246:80', '139.162.78.109:8080', '88.198.24.108:8080', '68.94.189.60:80', '203.202.245.58:80', '176.9.75.42:8080', '78.47.16.54:80', '198.199.86.11:8080', '128.199.202.122:8080', '209.97.150.167:8080', '134.209.29.120:3128', '159.203.61.169:3128', '191.96.42.80:8080', '176.9.119.170:8080', '102.129.249.120:8080' ]  # https://free-proxy-list.net/
+    PROXY_PAGE = None
+    MAX_PROXY_PAGE = 20
+    PROXIES = [ '80.48.119.28:8080', '165.154.243.252:80', '139.162.153.173:80', '198.59.191.234:8080', '139.59.1.14:8080', '169.57.1.85:8123', '149.129.130.68:3128', '146.196.48.2:80', '219.78.228.211:80', '161.97.126.37:8118', '54.210.239.35:80', '172.104.206.170:80', '103.152.112.162:80', '41.188.149.79:80', '165.154.226.12:80', '139.99.237.62:80', '83.229.72.174:80', '20.54.56.26:8080', '34.125.221.146:80', '165.154.243.53:80', '20.111.54.16:80', '20.206.106.192:8123', '42.3.182.149:80', '103.167.134.31:80', '219.78.194.41:80', '49.207.36.81:80', '81.200.123.74:80', '187.32.147.196:80', '110.164.3.7:8888', '147.182.202.202:80', '165.154.244.94:80', '172.104.111.212:80', '20.210.113.32:8123', '20.24.43.214:8123', '8.209.246.6:80', '58.27.59.249:80', '45.153.185.174:80', '154.236.189.27:8080', '217.11.186.12:3128', '167.71.199.228:8080', '155.4.244.218:80', '187.217.54.84:80', '103.152.232.194:8080', '20.81.62.32:3128', '207.182.129.142:3128', '193.114.115.186:80', '201.229.250.22:8080', '165.154.225.65:80', '41.184.178.247:8080', '170.0.86.147:999' ]  # https://free-proxy-list.net/
 
     def __init__(self):
         pass
@@ -39,13 +42,55 @@ class Util:
             return False
 
     def get_proxy(self):
+        if not len(self.PROXIES):
+            self.update_proxy()
+
         random.seed(time.time())
         offset = random.randint(0, len(self.PROXIES) - 1)
-        proxies = {"http": "http://" + self.PROXIES[offset]}
+        proxies = { "http": self.PROXIES[offset] }
+        del self.PROXIES[offset]
 
         return proxies
 
-    def update_proxy(self):
+    def update_proxy(self, proxy_page: int = 1):
+        import json
+
+        self.PROXIES = []
+        if self.PROXY_PAGE:
+            self.PROXY_PAGE += 1
+        elif proxy_page:
+            self.PROXY_PAGE = proxy_page
+        else:
+            self.PROXY_PAGE = 1
+        self.PROXY_PAGE = self.PROXY_PAGE % self.MAX_PROXY_PAGE if self.PROXY_PAGE > self.MAX_PROXY_PAGE else self.PROXY_PAGE
+
+        retry = 0
+        while retry < self.RETRY:
+            try:
+                proxy_url = "https://proxylist.geonode.com/api/proxy-list?limit=500&page={}&sort_by=lastChecked&sort_type=desc".format(self.PROXY_PAGE)
+                print("Getting proxies from {}".format(proxy_url))
+                html = self.html_get(proxy_url, use_proxy=False)
+
+                proxies_json = json.loads(html)
+                for proxy in proxies_json['data']:
+                    if proxy['protocols'][0] in [ 'http', 'https', 'socks4', 'socks5' ] and re.match("\d+\.\d+\.\d+\.\d+", proxy['ip'], re.I) and re.match("\d+", proxy['port'], re.I):
+                        self.PROXIES.append("{}://{}:{}".format(proxy['protocols'][0], proxy['ip'], proxy['port']))
+
+                if not len(self.PROXIES):
+                    retry += 1
+                    continue
+
+                break
+            except:
+                traceback.print_exc()
+                retry += 1
+                time.sleep(0.3)
+
+        if retry >= self.RETRY:
+            print("Failed updating proxies.")
+            sys.exit(0)
+
+    def old_update_proxy(self):
         from selenium import webdriver
         from selenium.webdriver.common.by import By
         from webdriver_manager.chrome import ChromeDriverManager
@@ -72,42 +117,69 @@ class Util:
                 retry += 1
                 print('Retrying...' + str(retry))
 
-    def html_get(self, url, text=True, use_proxy=True):
+    def html_get(self, url, stock_name=None, all_stock_names=None, proxy=None, text=True, use_proxy=True, verify_item=None):
+        header = {}
+        if all_stock_names:
+            header = { 'Referer': 'https://www.marketwatch.com/{}/'.format(all_stock_names[random.randint(0, len(all_stock_names) - 1)]), 'Host': 'www.marketwatch.com' }
+
         counter = 0
         connection_error = 0
         while counter < self.RETRY:
             counter += 1
             try:
-                header = { 'User-Agent': generate_user_agent() }
-                if use_proxy:
+                header['User-Agent'] = generate_user_agent()
+                proxies = None
+                if proxy:
+                    proxies = proxy
+                elif use_proxy:
                     proxies = self.get_proxy()
+                params = { 'headers': header, 'timeout': self.REQUEST_TIMEOUT }
+                if proxies:
+                    params['proxies'] = proxies
                     print("PROXY => {:}".format(proxies))
-                res = requests.get(url, headers=header, proxies=proxies, timeout=self.REQUEST_TIMEOUT)
+                res = requests.get(url, **params)
                 break
             except requests.ConnectionError:
                 connection_error += 1
+                print("Connection Error: Sleep for 5 seconds...")
+                time.sleep(5)
             except requests.TooManyRedirects:
+                time.sleep(0.3)
                 pass
             except:
+                sys.stderr.write("*** {} ***\n".format(url))
                 traceback.print_exc()
-                time.sleep(0.5)
+                sys.stderr.write("--- {} ---\n".format(url))
+                time.sleep(0.3)
 
         if counter >= self.RETRY:
             print('Failed retrying!')
+            if stock_name:
+                self.add_failed_stock(stock_name)
 
             if connection_error >= self.RETRY:
+                print("Stopped due to Connection Error.")
                 sys.exit(1)
-                return 'connection_error'
+                # return 'connection_error'
             return -1
         else:
+            if verify_item and verify_item not in res.text:
+                print("The fetched page is wrong.")
+                sys.exit(1)
+
             if text:
                 return res.text
             else:
                 return res.content
 
-    def to_ymd(self, dt, sep='/'):
+    def mdy_to_ymd(self, dt, sep='/'):
         dt = dt.split(sep)
         return "{}-{}-{}".format(dt[2], dt[0], dt[1])
+
+    def transform_ymd(self, dt, sep='/'):
+        import re
+        dt = re.split(sep, dt)
+        return "{}-{}-{}".format(dt[0], dt[1], dt[2])
 
     def last_weekdays(self):
         import datetime
@@ -152,15 +224,17 @@ class MysqlUtil(Util):
 
 
 class StockUtil(Util):
-    insert_index_volume_sql = 'INSERT INTO index_volume (`date`, stock_id, volume, `index`, index_open, index_low, index_high) VALUES(%s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE `index` = VALUES(`index`), index_open = VALUES(index_open), index_low = VALUES(index_low), index_high = VALUES(index_high), volume = VALUES(volume)'
+    insert_index_volume_sql = 'INSERT IGNORE INTO index_volume (`date`, stock_id, volume, `index`, index_open, index_low, index_high) VALUES(%s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE `index` = VALUES(`index`), index_open = VALUES(index_open), index_low = VALUES(index_low), index_high = VALUES(index_high), volume = VALUES(volume)'
     qualified_days_ratio = 0.6
     rs_ratio = 0.3
+    year_min_ratio = 0.6
     num_days = 30
     volume_ratio = 1.3
     ratio_ma50 = 0.92
     ratio_ma150 = 0.92
     ratio_ma200 = 0.92
     stagnate_ratio = 0.25
+    retrospect_days = 400
 
     def __init__(self, conn=None, cursor=None):
         Util.__init__(self)
@@ -267,7 +341,61 @@ class StockUtil(Util):
         self.cursor.execute(self.insert_index_volume_sql, tuple(data))
         self.conn.commit()
 
-    def get_index_volume(self, path):
+    def renew_index_volume(self, filename):
+        params = {}
+        if filename:
+            params['filename'] = filename
+        else:
+            self.retrieve_all_stocks()
+        self.get_index_volume(**params, skip_stock=True)
+        # self.retrospect_ma(stock_id=None, days=self.retrospect_days)
+
+    def retrieve_all_stocks(self):
+        url = 'https://www.marketwatch.com/tools/markets/stocks/country/united-states/'
+
+        page = 1
+        file_counter = 1
+        stocks = []
+        while True:
+            try:
+                current_url = url + str(page)
+                print("Fetching >>> {}".format(current_url))
+                html = self.html_get(current_url, verify_item='mw-logo-fp')
+                soup = BeautifulSoup(html, 'html.parser')
+                has_data = False
+
+                for tr in soup.find('tbody').find_all("tr"):
+                    for stock in re.compile(r"\s+\(([a-zA-Z]+?)\)$", re.S | re.UNICODE).findall(tr.find('a').text):
+                        has_data = True
+                        stocks.append(stock)
+                        if len(stocks) >= 8000:
+                            import csv
+                            file = open('GICS/stocks-Xueqiu-all-' + str(file_counter) + '.csv', 'w+', newline='', encoding="utf8")
+                            csvCursor = csv.writer(file)
+                            csvCursor.writerow(['Xueqiu-all'])
+                            for stock in stocks:
+                                csvCursor.writerow(['https://xueqiu.com/S/' + stock])
+                            file.close()
+
+                            stocks = []
+                            file_counter += 1
+                page += 1
+                if not has_data:
+                    break
+            except:
+                traceback.print_exc()
+                time.sleep(1)
+
+        if stocks:
+            import csv
+            file = open('GICS/stocks-Xueqiu-all-' + str(file_counter) + '.csv', 'w+', newline='', encoding="utf8")
+            csvCursor = csv.writer(file)
+            csvCursor.writerow(['Xueqiu-all'])
+            for stock in stocks:
+                csvCursor.writerow(['https://xueqiu.com/S/' + stock])
+            file.close()
+
+    def get_index_volume(self, path='GICS', filename=None, skip_stock=True):
         self.cursor.execute('SELECT stock_name FROM stock_list')
         all_stock_names = [ stock_name['stock_name'] for stock_name in self.cursor.fetchall() ]
         self.new_stocks = []
@@ -280,6 +408,8 @@ class StockUtil(Util):
 
         for file_name in os.listdir(path):
             if file_name.endswith(('test' if self.test else '') + ".csv"):
+                if filename and filename != file_name:
+                    continue
                 print("===Processing {}===".format(file_name))
 
                 with open(path + '/' + file_name, encoding="utf8", newline='') as csvfile:
@@ -293,25 +423,33 @@ class StockUtil(Util):
                             stock_name = col.split('/')[-1]
                             if not stock_name:
                                 continue
-                            elif stock_name in all_stock_names:
+                            elif skip_stock and stock_name in all_stock_names:
                                 print("Skipped {}...".format(stock_name))
                                 continue
-                            print("Processing {}".format(stock_name))
+                            print("\nProcessing {}".format(stock_name))
 
                             download_link = None
-                            html = self.html_get(url.format(stock_name))
-                            if html != -1:
-                                soup = BeautifulSoup(html, 'html.parser')
-                                for a_href in soup.findAll("a"):
-                                    if a_href.text == 'Download Data (.csv)':
-                                        download_link = a_href['href']
-                                        break
+                            counter = 0
+                            while counter < self.RETRY:
+                                counter += 1
 
-                            if not download_link:
+                                html = self.html_get(url.format(stock_name), stock_name=stock_name, all_stock_names=all_stock_names, verify_item='MW_Masthead_Logo')
+                                if html != -1:
+                                    soup = BeautifulSoup(html, 'html.parser')
+                                    for a_href in soup.findAll("a"):
+                                        if a_href.text == 'Download Data (.csv)':
+                                            download_link = a_href['href']
+                                            break
+                                if download_link:
+                                    break
+                            if counter >= self.RETRY:
+                                print("*** Failed: {} ***\n".format(stock_name))
+                                self.add_failed_stock(stock_name)
+                                time.sleep(0.3)
                                 continue
 
                             params = parse_qs(urlparse(download_link).query)
-                            params['startdate'][0] = (datetime.now() - timedelta(days=365)).strftime("%m/%d/%Y 00:00:00")
+                            params['startdate'][0] = (datetime.now() - timedelta(days=self.retrospect_days)).strftime("%m/%d/%Y 00:00:00")
                             params['enddate'][0] = datetime.now().strftime("%m/%d/%Y 23:59:59")
                             download_link = "{}?{}".format(download_link[:download_link.find('?')], urlencode(params, doseq=True))
                             print("download_link: {}".format(download_link))
@@ -321,22 +459,34 @@ class StockUtil(Util):
                             self.new_stocks.append(stock_id)
 
                             try:
-                                content = self.html_get(download_link)
+                                content = self.html_get(download_link, stock_name=stock_name, all_stock_names=all_stock_names)
                                 df = pd.read_csv(StringIO(content))
                                 rows = []
                                 for _, row in df.iterrows():
-                                    dt = self.to_ymd(row['Date'])
+                                    dt = self.mdy_to_ymd(row['Date'])
                                     idx = float(str(row['Close']).replace('$', '').replace(',', ''))
                                     idx_open = float(str(row['Open']).replace('$', '').replace(',', ''))
                                     idx_low = float(str(row['Low']).replace('$', '').replace(',', ''))
                                     idx_high = float(str(row['High']).replace('$', '').replace(',', ''))
-                                    volume = self.transform_m_b_to_number(row['Volume'].replace(',', ''))
+                                    volume = self.transform_m_b_to_number(str(row['Volume']).replace(',', ''))
                                     rows.append((dt, stock_id, volume, idx, idx_open, idx_low, idx_high))
-                                print(rows)
                                 self.cursor.executemany(self.insert_index_volume_sql, rows)
                                 self.conn.commit()
                             except:
+                                sys.stderr.write("*** {} ***\n".format(stock_name))
                                 traceback.print_exc()
+                                self.add_failed_stock(stock_name)
+
+                                print("*** Deleting {} ({}) ***".format(stock_name, stock_id))
+                                delete_stock_id_sql = 'DELETE FROM stock_list WHERE id = %s'
+                                self.cursor.execute(delete_stock_id_sql, (stock_id))
+                                delete_index_sql = 'DELETE FROM index_volume WHERE stock_id = %s'
+                                self.cursor.execute(delete_index_sql, (stock_id))
+                                self.conn.commit()
+
+                                sys.stderr.write("--- {} ---\n".format(stock_name))
+
+                            self.retrospect_ma(stock_id=stock_id, days=self.retrospect_days)
 
                 print("---Finished {}---".format(file_name))
 
@@ -471,7 +621,7 @@ class StockUtil(Util):
     def renew_categories_index_volume(self):
         self.get_Xueqiu_categories()
         self.get_index_volume('.' if self.test else 'GICS')
-        self.retrospect_ma(stock_id=None, days=365)
+        self.retrospect_ma(stock_id=None, days=self.retrospect_days)
 
     def line_notify(self, group=None, good_stock_names=None):
         from datetime import date
@@ -486,6 +636,8 @@ class StockUtil(Util):
         }
         if group:
             msg = "[{}] {}".format(group, ', '.join(good_stock_names))
+        elif good_stock_names:
+            msg = "{}".format(', '.join(good_stock_names))
         elif not (self.test or self.stagnate):
             msg = "=== {} ===".format(date.today())
         else:
@@ -499,7 +651,7 @@ class StockUtil(Util):
             traceback.print_exc()
 
     def get_stock_days(self, num_days=20):
-        skip_dates = [ '2020-11-26', '2020-12-25', '2021-01-01', '2021-01-18', '2021-02-15', '2021-04-02', '2021-05-31', '2021-07-05', '2021-09-06', '2021-11-25', '2021-12-24', '2022-01-17', '2022-02-21', '2022-04-15', '2022-05-30', '2022-06-20', '2022-07-04', '2022-09-05', '2022-10-11', '2022-11-11', '2022-11-24', '2022-11-25', '2022-12-26', '2023-01-02' ]
+        skip_dates = [ '2020-11-26', '2020-12-25', '2021-01-01', '2021-01-18', '2021-02-15', '2021-04-02', '2021-05-31', '2021-07-05', '2021-09-06', '2021-11-25', '2021-12-24', '2022-01-17', '2022-02-21', '2022-04-15', '2022-05-30', '2022-06-20', '2022-07-04', '2022-09-05', '2022-11-24', '2022-12-26', '2023-01-02', '2023-01-16', '2023-02-20', '2023-04-07', '2023-05-29', '2023-06-19', '2023-07-04', '2023-09-04', '2023-11-23', '2023-12-25' ]
 
         from datetime import datetime, timedelta
         if datetime.strftime(datetime.now() - timedelta(1), '%Y-%m-%d') in skip_dates:
@@ -511,7 +663,7 @@ class StockUtil(Util):
             today = self.today = pd.datetime.today()
         else:
             # today = pd.to_datetime(input("Enter date: "))
-            today = pd.to_datetime('2020-11-10')
+            today = pd.to_datetime('2022-10-07')
             today += BDay(1)
             self.today = today
         days = []
@@ -534,8 +686,7 @@ class StockUtil(Util):
     def get_blocked_stocks(self):
         select_blocked_sql = '''
             SELECT      stock_name
-            FROM        blocked_stock bs
-            INNER JOIN  stock_list sl ON sl.id = bs.stock_id
+            FROM        blocked_stock
         '''
 
         blocked_stocks = []
@@ -545,9 +696,14 @@ class StockUtil(Util):
 
         return blocked_stocks
 
-    def add_blocked_stock(self, stock_id):
-        insert_blocked_sql = 'INSERT INTO blocked_stock (stock_id, update_time) VALUES (%s, NOW()) ON DUPLICATE KEY UPDATE update_time = NOW()'
-        self.cursor.execute(insert_blocked_sql, (stock_id))
+    def add_blocked_stock(self, stock_name):
+        insert_blocked_sql = 'INSERT INTO blocked_stock (stock_name, update_time) VALUES (%s, NOW()) ON DUPLICATE KEY UPDATE update_time = NOW()'
+        self.cursor.execute(insert_blocked_sql, (stock_name))
+        self.conn.commit()
+
+    def add_failed_stock(self, stock_name):
+        insert_failed_sql = 'INSERT INTO failed_stock (stock_name, update_time) VALUES (%s, NOW()) ON DUPLICATE KEY UPDATE update_time = NOW()'
+        self.cursor.execute(insert_failed_sql, (stock_name))
         self.conn.commit()
 
     def compute_ma(self, ma, stock_id, date):
@@ -581,6 +737,8 @@ class StockUtil(Util):
             SELECT DISTINCT(stock_id), sl.stock_name
             FROM index_volume iv
             INNER JOIN stock_list sl ON sl.`id` = iv.`stock_id`
+            # LIMIT 8200
+            # LIMIT 18446744073709551615 OFFSET 8200
             {}
         '''.format(stock_id_sql))
         for row in self.cursor.fetchall():
@@ -590,6 +748,7 @@ class StockUtil(Util):
                 continue
             print('=== Computing ma: {}({}) ==='.format(row['stock_name'], stock_id))
             for dt in list(filter(lambda d: d <= zero_ma_date[stock_id], days)):
+            # for dt in days:
                 self.insert_ma(stock_id, dt)
 
     def retrieve_zero_ma_date(self, stock_id=None):
@@ -638,34 +797,57 @@ class StockUtil(Util):
     def qualified_year_max_min(self, stock_id, index):
         year_max, year_min = self.get_one_year_max_min_index(stock_id)
         # return abs(index - year_max) / year_max <= 0.25 and (index - year_min) / year_min >= 0.3
-        return (index - year_min) / year_min >= 0.3
+        return True if year_min != 0 and index >= ((year_max - year_min) * self.year_min_ratio + year_min) else False
 
-    def get_index_volume_from_html(self, html, day):
+    def get_index_volume_from_html(self, html, day, stock_website):
         soup = BeautifulSoup(html, 'html.parser')
-        counter = 1
+        if stock_website == 'yahoo':
+            counter = 0
+        else:
+            counter = 1
 
         while True:
             try:
-                tr = soup.find("div", {"class": "download-data"}).select('tr')[counter]
+                if stock_website == 'yahoo':
+                    tr = soup.find("div", {"id": "Col1-1-HistoricalDataTable-Proxy"}).find("tbody").select('tr')[counter]
+                    while '股息' in tr.text:
+                        counter += 1
+                        tr = soup.find("div", {"id": "Col1-1-HistoricalDataTable-Proxy"}).find("tbody").select('tr')[counter]
 
-                page_day = self.to_ymd(tr.select('td')[0].select('div')[0].text, '/')
-                if page_day == day:
-                    pass
-                elif page_day > day:
-                    counter += 1
-                    continue
+                    page_day = self.transform_ymd(tr.select('td')[0].select('span')[0].text, '年|月|日')
+                    if page_day == day:
+                        pass
+                    elif page_day > day:
+                        counter += 1
+                        continue
+                    else:
+                        return -1, None, None
+
+                    index_open, index_high, index_low, index = map(lambda i: float(tr.select('td')[i].select('span')[0].text.replace('$', '').replace(',', '')), [1, 2, 3, 4])
+                    volume = tr.select('td')[6].select('span')[0].text.replace(',', '')
+                    volume = self.transform_m_b_to_number(volume)
+
+                    return True, { 'index_open': index_open, 'index_high': index_high, 'index_low': index_low, 'index': index }, volume
                 else:
-                    return False, None, None
+                    tr = soup.find("div", {"class": "download-data"}).select('tr')[counter]
 
-                index_open, index_high, index_low, index = map(lambda i: float(tr.select('td')[i].text.replace('$', '').replace(',', '')), [1, 2, 3, 4])
-                volume = tr.select('td')[5].text.replace(',', '')
-                volume = self.transform_m_b_to_number(volume)
+                    page_day = self.mdy_to_ymd(tr.select('td')[0].select('div')[0].text, '/')
+                    if page_day == day:
+                        pass
+                    elif page_day > day:
+                        counter += 1
+                        continue
+                    else:
+                        return -1, None, None
 
-                return True, { 'index_open': index_open, 'index_high': index_high, 'index_low': index_low, 'index': index }, volume
+                    index_open, index_high, index_low, index = map(lambda i: float(tr.select('td')[i].text.replace('$', '').replace(',', '')), [1, 2, 3, 4])
+                    volume = tr.select('td')[5].text.replace(',', '')
+                    volume = self.transform_m_b_to_number(volume)
+
+                    return True, { 'index_open': index_open, 'index_high': index_high, 'index_low': index_low, 'index': index }, volume
             except:
                 traceback.print_exc()
-                time.sleep(1)
-                return False, None, None
+                return -2, None, None
 
     def yield_stock_names(self, file_name):
         import csv
@@ -758,7 +940,7 @@ class StockUtil(Util):
 
             year_max, year_min = self.get_one_year_max_min_index(stock_id)
             row = self.compute_min_max_avg(stock_name)
-            if is_qualified and row and year_min and abs(row['avg'] - year_min) / year_min < 0.3:
+            if is_qualified and row and year_min and abs(row['avg'] - year_min) / year_min < self.year_min_ratio:
                 if not (self.stagnate and is_stagnating_stock):
                     stocks.append(stock_name)
                 rows.append((today, stock_name, 'weekly' if self.stagnate else 'daily'))
@@ -770,10 +952,10 @@ class StockUtil(Util):
         self.num_days = tmp_num_days
         return stocks
 
-    def get_stock_daily(self, file_name):
+    def get_stock_daily(self, file_name, stock_website=None):
         days = self.get_stock_days(self.num_days)
         blocked_stocks = self.get_blocked_stocks()
-        good_stock_names = []
+        good_stock_names, all_good_stock_names = [], []
         self.rs = 0
         self.rs_counter = 0
 
@@ -781,7 +963,7 @@ class StockUtil(Util):
             if stock_name in blocked_stocks:
                 continue
 
-            print('***' + stock_name + '***')
+            print("\n*** {} ***".format(stock_name))
             stock_id = self.get_stock_id(stock_name)
             # self.insert_ma(stock_id, '2022-01-14')
             # continue
@@ -797,7 +979,11 @@ class StockUtil(Util):
                 for key in ['index', 'volume',  'ma_5', 'ma_10', 'ma_20', 'ma_60', 'ma_50', 'ma_150', 'ma_200']:
                     stocks_data[stock_name][row['date']][key] = row[key]
 
-            url = "https://www.marketwatch.com/investing/stock/" + stock_name + "/download-data"
+            if stock_website == 'yahoo':
+                url = "https://hk.finance.yahoo.com/quote/{}/history".format(stock_name)
+            else:
+                url = "https://www.marketwatch.com/investing/stock/{}/download-data".format(stock_name)
+
             avg_volume = self.compute_avg_volume(stock_id)
             volumes_list = []
             successful_days = 0
@@ -806,26 +992,27 @@ class StockUtil(Util):
             first_day_success = 0
             blocked = 0
             qualified_days = 0
+            html = None
             for day in days[::-1]:
+                success = 0
                 day_counter += 1
                 counter = 0
                 if stock_name in stocks_data and day in stocks_data[stock_name]:
                     volumes_list.append(float(stocks_data[stock_name][day]['volume']))
                     successful_days += 1
                 else:
-                    print("{}: {}".format(day, url))
+                    print("{} {}: {}".format('(From cached html)' if html and html != 'connection_error' else '', day, url))
                     while counter < self.RETRY:
                         counter += 1
 
-                        html = self.html_get(url)
+                        html = html if html and html != 'connection_error' else self.html_get(url, stock_name=stock_name, verify_item='MW_Masthead_Logo')
                         if html == 'connection_error':
                             connection_error = 1
                         elif html != -1:
                             connection_error = 0
 
-                            success, index_dict, volume = self.get_index_volume_from_html(html, day)
-                            print(index_dict)
-                            if not success:
+                            success, index_dict, volume = self.get_index_volume_from_html(html, day, stock_website)
+                            if success != True:
                                 counter = self.RETRY
                                 break
 
@@ -838,17 +1025,19 @@ class StockUtil(Util):
                             stocks_data[stock_name][day]['volume'] = volume
 
                             self.insert_index_volume(day, stock_id, index_dict, volume)
-                            ma = {}
-                            for ma_days in [5, 10, 20, 60, 50, 150, 200]:
-                                if ma_days not in ma or ma[ma_days] == 0:
-                                    ma[ma_days] = stocks_data[stock_name][day]['ma_{}'.format(ma_days)] = self.compute_ma(ma_days, stock_id, day)
-                            self.insert_ma(stock_id, day, ma)
+                            # ma = {}
+                            # for ma_days in [5, 10, 20, 60, 50, 150, 200]:
+                            #     if ma_days not in ma or ma[ma_days] == 0:
+                            #         ma[ma_days] = stocks_data[stock_name][day]['ma_{}'.format(ma_days)] = self.compute_ma(ma_days, stock_id, day)
+                            # self.insert_ma(stock_id, day, ma)
 
                             successful_days += 1
                             break
 
                 if counter >= self.RETRY:
                     print('Not Found: {} => {}'.format(stock_name, day))
+                    if success == -1:
+                        self.add_failed_stock(stock_name)
 
                     failed_days += 1
                     if failed_days >= 3 and failed_days > successful_days and not connection_error and not first_day_success:
@@ -858,19 +1047,19 @@ class StockUtil(Util):
                     if day_counter == 1:
                         first_day_success = 1
 
-                    print('==={} {}'.format(stock_name, day))
+                    print("\n==={} {}".format(stock_name, day))
                     print(stocks_data[stock_name][day])
-                    print("avg_volume: {}".format(avg_volume))
-                    print("day volume: {}".format(stocks_data[stock_name][day]['volume']))
-                    print("less than avg_volume*{}: {}".format(self.volume_ratio, stocks_data[stock_name][day]['volume'] <= float(avg_volume) * self.volume_ratio))
-                    print("qualified_year_max_min: {}".format(self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index'])))
-                    print("index bigger than ma_50*{}: {}".format(self.ratio_ma50, stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'] * self.ratio_ma50))
-                    print("ma_50 bigger than ma_150: {}".format(stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150']))
-                    print("ma_50 bigger than ma_200: {}".format(stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200']))
-                    print('---{} {}'.format(stock_name, day))
+                    # print("avg_volume: {}".format(avg_volume))
+                    # print("day volume: {}".format(stocks_data[stock_name][day]['volume']))
+                    # print("less than avg_volume*{}: {}".format(self.volume_ratio, stocks_data[stock_name][day]['volume'] <= float(avg_volume) * self.volume_ratio))
+                    # print("qualified_year_max_min: {}".format(self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index'])))
+                    # print("index bigger than ma_50*{}: {}".format(self.ratio_ma50, stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'] * self.ratio_ma50))
+                    # print("ma_50 bigger than ma_150: {}".format(stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150']))
+                    # print("ma_50 bigger than ma_200: {}".format(stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200']))
+                    print("---{} {}\n".format(stock_name, day))
 
-                    if stocks_data[stock_name][day]['volume'] <= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'] * self.ratio_ma50 and (stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150'] * self.ratio_ma150 or stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200'] * self.ratio_ma200):
-                        qualified_days += 1
+                    # if stocks_data[stock_name][day]['volume'] <= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'] * self.ratio_ma50 and (stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150'] * self.ratio_ma150 or stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200'] * self.ratio_ma200):
+                    #     qualified_days += 1
 
                     ### day_minus_one = (datetime.strptime(day, '%Y-%m-%d') - timedelta(1)).strftime("%Y-%m-%d")
                     ### day_minus_one_ma_60 = stocks_data[stock_name][day_minus_one]['ma_60'] if day_minus_one in stocks_data[stock_name] and 'ma_60' in stocks_data[stock_name][day_minus_one] else 0
@@ -879,16 +1068,29 @@ class StockUtil(Util):
 
             if blocked and not self.test:
                 print("Add {} into blocked list".format(stock_name))
-                self.add_blocked_stock(stock_id)
+                self.add_blocked_stock(stock_name)
+                continue
+
+            day_keys = sorted(stocks_data[stock_name].keys()) if stock_name in stocks_data else []
+            for day in day_keys:
+                ma = {}
+                for ma_days in [5, 10, 20, 60, 50, 150, 200]:
+                    if ma_days not in ma or ma[ma_days] == 0:
+                        ma[ma_days] = stocks_data[stock_name][day]['ma_{}'.format(ma_days)] = self.compute_ma(ma_days, stock_id, day)
+                self.insert_ma(stock_id, day, ma)
+
+                if stocks_data[stock_name][day]['volume'] <= float(avg_volume) * self.volume_ratio and self.qualified_year_max_min(stock_id, stocks_data[stock_name][day]['index']) and stocks_data[stock_name][day]['index'] >= stocks_data[stock_name][day]['ma_50'] * self.ratio_ma50 and (stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_150'] * self.ratio_ma150 or stocks_data[stock_name][day]['ma_50'] >= stocks_data[stock_name][day]['ma_200'] * self.ratio_ma200):
+                        qualified_days += 1
 
             volume_base = sum(volumes_list[1:]) / (len(days) - 1)
             if volume_base > 0:
                 print('volume percent: {}'.format(volumes_list[0] / volume_base))
 
             rs = 0
-            day_keys = sorted(stocks_data[stock_name].keys()) if stock_name in stocks_data else []
             # len(stocks_data[stock_name]) == num_days and days[-1] in stocks_data[stock_name] and days[0] in stocks_data[stock_name]:
             if len(day_keys) >= self.num_days / 2:
+                if stocks_data[stock_name][day_keys[0]]['index'] == 0:
+                    continue
                 rs = (stocks_data[stock_name][day_keys[-1]]['index'] - stocks_data[stock_name][day_keys[0]]['index']) / stocks_data[stock_name][day_keys[0]]['index']
                 self.rs += rs
                 self.rs_counter += 1
@@ -905,8 +1107,21 @@ class StockUtil(Util):
                 # volume_base > 0 and volumes_list[0] / volume_base >= 1.45 :
                 if stocks_data[stock_name][day_keys[-1]]['volume'] <= float(avg_volume) * self.volume_ratio and qualified_days >= len(day_keys) * self.qualified_days_ratio:
                     # if 2 <= qualified_days <= 5:
-                    good_stock_names.append({'stock_name': stock_name, 'rs': rs})
+                    gsn = {'stock_name': stock_name, 'rs': rs}
+                    all_good_stock_names.append(gsn)
+
+                    if self.is_stagnate_stock(stock_name) and (not self.good(stock_name) or self.test):
+                        if not self.test:
+                            self.cursor.execute("INSERT IGNORE INTO good_stock (date, stock_name) VALUES (%s, %s)", (self.today.strftime("%Y-%m-%d"), stock_name))
+                            self.conn.commit()
+                        good_stock_names.append(stock_name)
+                        if len(good_stock_names) >= 10:
+                            self.line_notify('', good_stock_names)
+                            good_stock_names = []
 
             print('---' + stock_name + '---')
 
-        return good_stock_names
+        if len(good_stock_names):
+            self.line_notify('', good_stock_names)
+
+        return all_good_stock_names
