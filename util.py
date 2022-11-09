@@ -42,7 +42,7 @@ class Util:
             return False
 
     def get_proxy(self):
-        if not len(self.PROXIES):
+        while not len(self.PROXIES):
             self.update_proxy()
 
         random.seed(time.time())
@@ -78,6 +78,7 @@ class Util:
 
                 if not len(self.PROXIES):
                     retry += 1
+                    time.sleep(0.3)
                     continue
 
                 break
@@ -141,8 +142,8 @@ class Util:
                 break
             except requests.ConnectionError:
                 connection_error += 1
-                print("Connection Error: Sleep for 5 seconds...")
-                time.sleep(5)
+                print("Connection Error: Sleep for {} seconds...".format(10 * connection_error))
+                time.sleep(10 * connection_error)
             except requests.TooManyRedirects:
                 time.sleep(0.3)
                 pass
@@ -150,7 +151,7 @@ class Util:
                 sys.stderr.write("*** {} ***\n".format(url))
                 traceback.print_exc()
                 sys.stderr.write("--- {} ---\n".format(url))
-                time.sleep(0.3)
+                time.sleep(10 * counter)
 
         if counter >= self.RETRY:
             print('Failed retrying!')
@@ -228,7 +229,7 @@ class StockUtil(Util):
     qualified_days_ratio = 0.6
     rs_ratio = 0.3
     year_min_ratio = 0.6
-    num_days = 30
+    num_days = 24
     volume_ratio = 1.3
     ratio_ma50 = 0.92
     ratio_ma150 = 0.92
@@ -350,6 +351,22 @@ class StockUtil(Util):
         self.get_index_volume(**params, skip_stock=True)
         # self.retrospect_ma(stock_id=None, days=self.retrospect_days)
 
+    def insert_manually_blocked_stocks(self):
+        sql = []
+        file = open("manual.txt", "r")
+        for stock in file.read().splitlines():
+            if not stock:
+                continue
+            sql.append("('{}', NOW(), 'manual')".format(stock.upper()))
+        if not sql:
+            return
+
+        mysql_util = MysqlUtil()
+        (conn, cursor) = mysql_util.create_sql_conn()
+        insert_stock_sql = "INSERT IGNORE INTO `blocked_stock` (`stock_name`, `update_time`, `type`) VALUES\n" + ", \n".join(sql) + ';'
+        cursor.execute(insert_stock_sql)
+        conn.commit()
+
     def retrieve_all_stocks(self):
         url = 'https://www.marketwatch.com/tools/markets/stocks/country/united-states/'
 
@@ -396,7 +413,14 @@ class StockUtil(Util):
             file.close()
 
     def get_index_volume(self, path='GICS', filename=None, skip_stock=True):
-        self.cursor.execute('SELECT stock_name FROM stock_list')
+        self.cursor.execute('''
+            SELECT  stock_name
+            FROM    stock_list
+            WHERE   id IN (
+                SELECT  DISTINCT(stock_id)
+                FROM    index_volume
+            )
+        ''')
         all_stock_names = [ stock_name['stock_name'] for stock_name in self.cursor.fetchall() ]
         self.new_stocks = []
 
@@ -477,12 +501,12 @@ class StockUtil(Util):
                                 traceback.print_exc()
                                 self.add_failed_stock(stock_name)
 
-                                print("*** Deleting {} ({}) ***".format(stock_name, stock_id))
-                                delete_stock_id_sql = 'DELETE FROM stock_list WHERE id = %s'
-                                self.cursor.execute(delete_stock_id_sql, (stock_id))
-                                delete_index_sql = 'DELETE FROM index_volume WHERE stock_id = %s'
-                                self.cursor.execute(delete_index_sql, (stock_id))
-                                self.conn.commit()
+                                # print("*** Deleting {} ({}) ***".format(stock_name, stock_id))
+                                # delete_stock_id_sql = 'DELETE FROM stock_list WHERE id = %s'
+                                # self.cursor.execute(delete_stock_id_sql, (stock_id))
+                                # delete_index_sql = 'DELETE FROM index_volume WHERE stock_id = %s'
+                                # self.cursor.execute(delete_index_sql, (stock_id))
+                                # self.conn.commit()
 
                                 sys.stderr.write("--- {} ---\n".format(stock_name))
 
@@ -623,7 +647,7 @@ class StockUtil(Util):
         self.get_index_volume('.' if self.test else 'GICS')
         self.retrospect_ma(stock_id=None, days=self.retrospect_days)
 
-    def line_notify(self, group=None, good_stock_names=None):
+    def line_notify(self, group=None, good_stock_names=None, msg=None):
         from datetime import date
 
         with open('cred.json') as json_file:
@@ -634,7 +658,9 @@ class StockUtil(Util):
             "Authorization": "Bearer {}".format(token),
             "Content-Type": "application/x-www-form-urlencoded"
         }
-        if group:
+        if msg:
+            pass
+        elif group:
             msg = "[{}] {}".format(group, ', '.join(good_stock_names))
         elif good_stock_names:
             msg = "{}".format(', '.join(good_stock_names))
@@ -657,10 +683,11 @@ class StockUtil(Util):
         if datetime.strftime(datetime.now() - timedelta(1), '%Y-%m-%d') in skip_dates:
             return []
 
+        from datetime import datetime
         import pandas as pd
         from pandas.tseries.offsets import BDay
         if not self.test:
-            today = self.today = pd.datetime.today()
+            today = self.today = datetime.today()
         else:
             # today = pd.to_datetime(input("Enter date: "))
             today = pd.to_datetime('2022-10-07')
@@ -896,8 +923,8 @@ class StockUtil(Util):
         tmp_num_days = self.num_days
         self.num_days = 90
         if not hasattr(self, 'today'):
-            import pandas as pd
-            self.today = pd.datetime.today()
+            from datetime import datetime
+            self.today = datetime.today()
         blocked_stocks = self.get_blocked_stocks()
         stocks = []
         rows = []

@@ -56,6 +56,7 @@ if __name__ == "__main__":
             print('Stock market closed yesterday.')
             sys.exit(0)
 
+        stock_util.insert_manually_blocked_stocks()
         stock_util.line_notify()
         for filename in os.listdir(folder):
             if not filename.endswith(('test' if stock_util.test else '') + ".csv"):
@@ -111,10 +112,18 @@ if __name__ == "__main__":
                                     gsn = []
                     if len(gsn):
                         stock_util.line_notify(group, gsn)
-                if not stock_util.test:
-                    os.rename('GICS/' + filename, 'GICS/finished/' + filename)
+                # if not stock_util.test:
+                #     os.rename('GICS/' + filename, 'GICS/finished/' + filename)
+            stock_util.line_notify('', '', "--- {} ---".format(filename))
             print("--- Finished {} ---".format(filename))
 
+    # os.system("/usr/bin/mysqldump -u root -p00000000 stocks > /home/decken/Dropbox/Stocks/stocks.sql")
+    # time.sleep(1800)
+
+    # import datetime
+    # today = datetime.date.today()
+    # tomorrow = today + datetime.timedelta(1)
+    # os.system('sudo rtcwake -v -t `date -d "' + str(tomorrow) + ' 07:50" +%s` -m mem')
 
 
 # stock_util.line_notify('1', ['2'])
